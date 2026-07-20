@@ -1,0 +1,9 @@
+[build]
+# No system dependencies needed — polar-mysql uses pure Rust MySQL driver
+pre-build = []
+
+[target.x86_64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main"
+
+[target.aarch64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main"
