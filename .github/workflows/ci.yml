@@ -48,6 +48,7 @@ jobs:
         with:
           path: target
           key: clippy-target-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - run: cargo clippy --all --all-targets
 
   test:
@@ -86,6 +87,7 @@ jobs:
         with:
           path: target
           key: test-target-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Setup test user
         run: |
           docker exec ${{ job.services.mysql.id }} mysql -u root -ptestpass -e "
