@@ -1,49 +1,637 @@
+mod cli;
+mod config;
+mod connection;
+mod interactive;
+mod logger;
+mod output;
+mod queries;
+mod server;
+
+use clap::{Parser, Subcommand};
+use keyring::Entry;
 use mysql_async::prelude::*;
+use rmcp::{ServiceExt, transport::stdio};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tracing::{error, info, warn};
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> mysql_async::Result<()> {
-    let url = "mysql://mcp:ProtoTest_2026@127.0.0.1:3306/mysql";
-    let pool = mysql_async::Pool::new(url);
-    let mut conn = pool.get_conn().await?;
+use crate::config::{
+    KEYRING_SERVICE, LazyConnectionEntry, PasswordSource, ResolvedConnection, TimeoutConfig,
+    default_config_path, read_config, resolve_all_connections_lazy, resolve_env_var_connection,
+    resolve_single_connection, store_keyring_password,
+};
+use crate::server::{format_error_chain, redact_url, MysqlMcp};
 
-    let v: Option<String> = conn.query_first("SELECT VERSION()").await?;
-    println!("VERSION: {v:?}");
+// ─── CLI Structure ─────────────────────────────────────────────────────
 
-    let db_rows: Vec<mysql_async::Row> = conn
-        .query("SHOW DATABASES")
-        .await?
-        .into_iter()
-        .collect();
-    for row in db_rows {
-        let db: Option<String> = row.get(0);
-        println!("  DB: {}", db.unwrap_or_default());
+#[derive(Parser)]
+#[command(name = "polar-mysql", version, about = concat!("CLI and MCP server for MySQL/PolarDB-X database introspection — v", env!("CARGO_PKG_VERSION")))]
+struct Cli {
+    /// Path to config file
+    #[arg(long, global = true)]
+    config: Option<String>,
+
+    /// Target connection name
+    #[arg(long, global = true)]
+    name: Option<String>,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run as MCP server (default when no subcommand given)
+    Mcp,
+
+    /// Test database connectivity and exit
+    Check {
+        /// Show detailed connection info
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Store password in OS keychain
+    StorePassword {},
+
+    /// Execute SQL from command line
+    Cli {
+        /// SQL statement to execute
+        #[arg(short, long)]
+        sql: Option<String>,
+
+        /// Read SQL from file
+        #[arg(short, long)]
+        file: Option<String>,
+
+        /// Test database connectivity without executing SQL
+        #[arg(long)]
+        check_connection: bool,
+
+        /// Show detailed connection info (use with --check-connection)
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Output format: table, json, vertical, csv
+        #[arg(long, default_value = "table")]
+        format: String,
+
+        /// Statement timeout (e.g. "30s", "5min"). Overrides config.
+        #[arg(long)]
+        statement_timeout: Option<String>,
+
+        /// Connection max lifetime before reconnect (e.g. "10min").
+        #[arg(long)]
+        connection_max_lifetime: Option<String>,
+
+        /// Enter interactive REPL mode
+        #[arg(short, long)]
+        interactive: bool,
+
+        /// Do not read or write persistent per-connection SQL history
+        #[arg(long)]
+        no_history: bool,
+    },
+}
+
+// ─── Keyring helpers ───────────────────────────────────────────────────
+
+fn check_keyring_available(username: &str) -> Result<(), String> {
+    let test_key = "__polar_mysql_keyring_test__";
+    let entry = Entry::new(KEYRING_SERVICE, username)
+        .map_err(|e| format!("keyring entry creation failed: {}", e))?;
+    entry
+        .set_password(test_key)
+        .map_err(|e| format!("keyring write failed: {}", e))?;
+    let read_back = entry
+        .get_password()
+        .map_err(|e| format!("keyring read-back failed: {}", e))?;
+    if read_back != test_key {
+        return Err("keyring read-back mismatch".to_string());
     }
-
-    conn.query_drop("DROP TABLE IF EXISTS poc").await?;
-    conn.query_drop("CREATE TABLE poc (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100))").await?;
-    conn.exec_drop("INSERT INTO poc (name) VALUES (:name)", params! { "name" => "hello" }).await?;
-
-    let poc_rows = conn.query_map("SELECT id, name FROM poc", |(id, name): (i32, String)| (id, name)).await?;
-    for (id, name) in &poc_rows { println!("  {id}: {name}"); }
-
-    let tbl_rows: Vec<mysql_async::Row> = conn
-        .query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() LIMIT 5")
-        .await?
-        .into_iter()
-        .collect();
-    for row in tbl_rows {
-        let t: Option<String> = row.get(0);
-        println!("  TABLE: {}", t.unwrap_or_default());
-    }
-
-    let explain_rows: Vec<mysql_async::Row> = conn
-        .query("EXPLAIN SELECT count(*) FROM poc")
-        .await?
-        .into_iter()
-        .collect();
-    println!("EXPLAIN: got {} rows", explain_rows.len());
-
-    pool.disconnect().await?;
-    println!("OK");
     Ok(())
+}
+
+fn read_password_secure() -> Result<String, String> {
+    use std::io::IsTerminal;
+
+    if std::io::stdin().is_terminal() {
+        let pw1 = rpassword::prompt_password("Enter password: ")
+            .map_err(|e| format!("failed to read password: {}", e))?;
+        if pw1.is_empty() {
+            return Err("password cannot be empty".to_string());
+        }
+        let pw2 = rpassword::prompt_password("Confirm password: ")
+            .map_err(|e| format!("failed to read password: {}", e))?;
+        if pw1 != pw2 {
+            return Err("passwords do not match".to_string());
+        }
+        Ok(pw1)
+    } else {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| format!("failed to read password from stdin: {}", e))?;
+        let pw = input.trim_end_matches(['\r', '\n']).to_string();
+        if pw.is_empty() {
+            return Err("password from stdin cannot be empty".to_string());
+        }
+        Ok(pw)
+    }
+}
+
+fn handle_store_password(name: Option<String>, config_path: Option<String>) {
+    let password = read_password_secure().unwrap_or_else(|e| {
+        eprintln!("error: {}", e);
+        std::process::exit(1);
+    });
+
+    let config_path = config_path
+        .map(PathBuf::from)
+        .or_else(default_config_path)
+        .unwrap_or_else(|| {
+            eprintln!("error: no config file specified and no default found");
+            std::process::exit(1);
+        });
+
+    if !config_path.exists() {
+        eprintln!("error: config file not found: {}", config_path.display());
+        std::process::exit(1);
+    }
+
+    let content = std::fs::read_to_string(&config_path).unwrap_or_else(|e| {
+        eprintln!("error: failed to read {}: {}", config_path.display(), e);
+        std::process::exit(1);
+    });
+
+    let multi: config::MultiConfig = toml::from_str(&content).unwrap_or_else(|e| {
+        eprintln!("error: failed to parse {}: {}", config_path.display(), e);
+        std::process::exit(1);
+    });
+
+    // Resolve connections from config
+    let connections = crate::config::resolve_named_connections(&multi);
+    let default_name = multi
+        .default_connection
+        .clone()
+        .or_else(|| connections.first().map(|c| c.name.clone()))
+        .unwrap_or_else(|| "default".to_string());
+
+    let target = if let Some(ref name) = name {
+        connections
+            .iter()
+            .find(|c| c.name == *name)
+            .unwrap_or_else(|| {
+                eprintln!("error: connection '{}' not found in config", name);
+                eprintln!(
+                    "  available: {:?}",
+                    connections.iter().map(|c| &c.name).collect::<Vec<_>>()
+                );
+                std::process::exit(1);
+            })
+    } else {
+        let default = default_name.clone();
+        connections
+            .iter()
+            .find(|c| c.name == default)
+            .unwrap_or_else(|| {
+                eprintln!(
+                    "error: default connection '{}' not found in config",
+                    default
+                );
+                std::process::exit(1);
+            })
+    };
+
+    let keyring_user = target.keyring_username();
+
+    if let Err(e) = store_keyring_password(&keyring_user, &password) {
+        eprintln!("error: {}", e);
+        std::process::exit(1);
+    }
+
+    println!(
+        "Password stored in OS keychain for '{}' (connection: '{}').",
+        keyring_user, target.name
+    );
+}
+
+// ─── Connection Diagnostics ────────────────────────────────────────────
+
+struct VerboseDetails {
+    server_version: Option<String>,
+    current_user: Option<String>,
+    current_database: Option<String>,
+    charset: Option<String>,
+    collation: Option<String>,
+    elapsed: Duration,
+}
+
+async fn query_verbose_details(
+    url: &str,
+    elapsed: Duration,
+) -> Result<VerboseDetails, Box<dyn std::error::Error + Send + Sync>> {
+    use crate::connection::do_connect;
+
+    let (_pool, mut conn) = do_connect(url, None).await?;
+
+    let row: mysql_async::Row = conn.query_first(queries::DATABASE_INFO).await?.unwrap();
+
+    Ok(VerboseDetails {
+        server_version: output::get_column_string(&row, 0),
+        current_database: output::get_column_string(&row, 1),
+        current_user: output::get_column_string(&row, 2),
+        charset: output::get_column_string(&row, 6),
+        collation: output::get_column_string(&row, 7),
+        elapsed,
+    })
+}
+
+fn print_verbose_details(details: &VerboseDetails) {
+    eprintln!("  [verbose] Connection Details:");
+    eprintln!(
+        "    {:24} {}",
+        "server_version",
+        details.server_version.as_deref().unwrap_or("--")
+    );
+    eprintln!(
+        "    {:24} {}",
+        "current_user",
+        details.current_user.as_deref().unwrap_or("--")
+    );
+    eprintln!(
+        "    {:24} {}",
+        "current_database",
+        details.current_database.as_deref().unwrap_or("--")
+    );
+    eprintln!(
+        "    {:24} {}",
+        "charset",
+        details.charset.as_deref().unwrap_or("--")
+    );
+    eprintln!(
+        "    {:24} {}",
+        "collation",
+        details.collation.as_deref().unwrap_or("--")
+    );
+    eprintln!(
+        "    {:24} {}ms",
+        "connect_time",
+        details.elapsed.as_millis()
+    );
+}
+
+async fn handle_check_connection(resolved: &ResolvedConnection, verbose: bool) {
+    let url = &resolved.connection_url;
+    let redacted = redact_url(url);
+
+    eprintln!("Connection: {}", resolved.name);
+    eprintln!();
+
+    match resolved.password_source {
+        PasswordSource::Keyring => {
+            eprintln!(
+                "[Keyring] Password read from OS keychain (user: {})",
+                resolved.keyring_username
+            );
+            let entry_result = Entry::new(KEYRING_SERVICE, &resolved.keyring_username)
+                .and_then(|e| e.get_password());
+            match entry_result {
+                Ok(pw) => {
+                    if pw.is_empty() {
+                        eprintln!("  WARNING: keyring returned empty password");
+                    } else {
+                        eprintln!(
+                            "  Keyring accessible, password retrieved ({} chars)",
+                            pw.len()
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  Keyring read-back failed: {}", e);
+                }
+            }
+            eprintln!();
+        }
+        PasswordSource::Plaintext(_) => {
+            eprintln!("[Keyring] Password from config file (plaintext)");
+            match check_keyring_available(&resolved.keyring_username) {
+                Ok(()) => {
+                    eprintln!(
+                        "  OS keychain is available -- password will be migrated on first successful connection"
+                    );
+                }
+                Err(e) => {
+                    eprintln!("  OS keychain NOT available: {}", e);
+                }
+            }
+            eprintln!();
+        }
+        PasswordSource::EnvVar => {
+            eprintln!("[Keyring] Password from environment variable (no keyring involved)");
+            eprintln!();
+        }
+        PasswordSource::None => {
+            eprintln!("[Keyring] No password configured");
+            eprintln!();
+        }
+    }
+
+    eprintln!("[1/1] Connecting to {} ...", redacted);
+    let start = Instant::now();
+    let version = match connection::do_connect(url, None).await {
+        Ok((_pool, mut conn)) => {
+            let elapsed = start.elapsed();
+            let ver: Option<String> = match conn.query_first("SELECT VERSION()").await {
+                Ok(Some(v)) => v,
+                _ => Some("(unknown)".to_string()),
+            };
+            let version = ver.unwrap_or_else(|| "(unknown)".to_string());
+            eprintln!("  Connected in {}ms", elapsed.as_millis());
+            eprintln!("  {}", version);
+
+            if verbose {
+                match query_verbose_details(url, elapsed).await {
+                    Ok(details) => print_verbose_details(&details),
+                    Err(e) => eprintln!("  [verbose] Failed to get details: {}", e),
+                }
+            }
+
+            eprintln!();
+            eprintln!("  SUCCESS");
+            version
+        }
+        Err(e) => {
+            let chain = format_error_chain(e.as_ref());
+            eprintln!("  FAILED: {}", chain);
+            eprintln!();
+            eprintln!("  Possible causes:");
+            eprintln!("  - Database server is not running or not reachable");
+            eprintln!("  - Firewall blocking port");
+            eprintln!("  - Wrong host, port, user, or password");
+            eprintln!("  - Server requires SSL/TLS (use sslmode in config)");
+            std::process::exit(1);
+        }
+    };
+
+    eprintln!();
+    eprintln!("  Database Version:");
+    eprintln!("    {}", version);
+    eprintln!();
+}
+
+async fn handle_check_connection_cmd(
+    conn_arg: Option<String>,
+    verbose: bool,
+    config_path: Option<PathBuf>,
+) {
+    let raw = read_config(config_path).unwrap_or_else(|e| {
+        eprintln!("error: {}", e);
+        std::process::exit(1);
+    });
+
+    let target_name = conn_arg.as_deref().unwrap_or(&raw.default_name);
+
+    let target_conn = match raw.connections.iter().find(|c| c.name == target_name) {
+        Some(c) => c,
+        None => {
+            eprintln!("error: connection '{}' not found", target_name);
+            eprintln!(
+                "  available: {:?}",
+                raw.connections.iter().map(|c| &c.name).collect::<Vec<_>>()
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let resolved = if raw.is_env_var {
+        resolve_env_var_connection(target_conn.url.clone().unwrap())
+    } else {
+        resolve_single_connection(
+            target_conn,
+            raw.config_path.clone(),
+            raw.base_timeout.as_ref(),
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        })
+    };
+
+    handle_check_connection(&resolved, verbose).await;
+}
+
+// ─── Process Lifecycle Helpers ─────────────────────────────────────────
+
+async fn await_shutdown_signal() -> &'static str {
+    let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                tokio::select! {
+                    _ = ctrl_c => "SIGINT",
+                    _ = sigterm.recv() => "SIGTERM",
+                }
+            }
+            Err(e) => {
+                warn!("failed to install SIGTERM handler: {e}, relying on SIGINT only");
+                let _ = ctrl_c.await;
+                "SIGINT"
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = ctrl_c.await;
+        "SIGINT"
+    }
+}
+
+#[cfg(unix)]
+async fn parent_death_watchdog(interval: std::time::Duration) {
+    unsafe extern "C" {
+        fn getppid() -> i32;
+    }
+    let original_ppid = unsafe { getppid() };
+    loop {
+        tokio::time::sleep(interval).await;
+        let current_ppid = unsafe { getppid() };
+        if current_ppid != original_ppid {
+            info!(
+                "parent process exited (PPID {} -> {}), initiating self-shutdown",
+                original_ppid, current_ppid
+            );
+            return;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn parent_death_watchdog(_interval: std::time::Duration) {
+    std::future::pending::<()>().await;
+}
+
+// ─── MCP Server ────────────────────────────────────────────────────────
+
+async fn run_mcp_server(config_path: Option<String>) {
+    let config_path_buf = config_path.map(PathBuf::from);
+
+    let (lazy_entries, default_name) = resolve_all_connections_lazy(config_path_buf)
+        .unwrap_or_else(|e| {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        });
+
+    let mut eager_entries = Vec::new();
+    let mut lazy_resolvers = Vec::new();
+    let mut timeout_configs: HashMap<String, TimeoutConfig> = HashMap::new();
+
+    for entry in lazy_entries {
+        match entry {
+            LazyConnectionEntry::Ready(resolved) => {
+                let conn_name = resolved.name.clone();
+                timeout_configs.insert(conn_name.clone(), resolved.timeout_config.clone());
+                eager_entries.push((resolved.name, resolved.connection_url));
+            }
+            LazyConnectionEntry::Pending {
+                name,
+                resolver,
+                timeout_config,
+            } => {
+                timeout_configs.insert(name.clone(), timeout_config);
+                lazy_resolvers.push((name, resolver));
+            }
+        }
+    }
+
+    let server = if !eager_entries.is_empty() && lazy_resolvers.is_empty() {
+        MysqlMcp::new_multi_disconnected(eager_entries, default_name, timeout_configs)
+    } else if !lazy_resolvers.is_empty() {
+        let all_lazy = eager_entries
+            .into_iter()
+            .map(|(name, url)| {
+                (
+                    name,
+                    Arc::new(move || Ok(url.clone()))
+                        as Arc<dyn (Fn() -> Result<String, String>) + Send + Sync>,
+                )
+            })
+            .chain(lazy_resolvers)
+            .collect();
+        MysqlMcp::new_multi_lazy(all_lazy, default_name, timeout_configs)
+    } else {
+        MysqlMcp::new_multi_disconnected(Vec::new(), default_name, HashMap::new())
+    };
+
+    let server = Arc::new(server);
+
+    // Signal + parent-death watchers
+    tokio::spawn(async {
+        let sig = await_shutdown_signal().await;
+        info!("received {sig}, shutting down");
+        std::process::exit(0);
+    });
+    tokio::spawn(async {
+        parent_death_watchdog(std::time::Duration::from_secs(5)).await;
+        std::process::exit(0);
+    });
+
+    let probe = Arc::clone(&server);
+    tokio::spawn(async move {
+        probe.try_connect().await;
+    });
+
+    info!("starting MCP server on stdio");
+
+    let service = match Arc::clone(&server).serve(stdio()).await {
+        Ok(s) => s,
+        Err(e) => {
+            error!("MCP server start failed: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    info!("MCP server ready");
+
+    match service.waiting().await {
+        Ok(reason) => info!("MCP server stopped: {reason:?}"),
+        Err(e) => error!("MCP server task join error: {e}"),
+    }
+
+    info!("MCP server exiting");
+    std::process::exit(0);
+}
+
+// ─── Entry Point ───────────────────────────────────────────────────────
+
+#[tokio::main]
+async fn main() {
+    logger::init_logging();
+
+    let cli = Cli::parse();
+
+    match cli.command {
+        None | Some(Commands::Mcp) => {
+            run_mcp_server(cli.config).await;
+        }
+        Some(Commands::Check { verbose }) => {
+            let config_path = cli.config.map(PathBuf::from);
+            handle_check_connection_cmd(cli.name, verbose, config_path).await;
+        }
+        Some(Commands::StorePassword {}) => {
+            handle_store_password(cli.name, cli.config);
+        }
+        Some(Commands::Cli {
+            sql,
+            file,
+            check_connection,
+            verbose,
+            format,
+            statement_timeout,
+            connection_max_lifetime,
+            interactive,
+            no_history,
+        }) => {
+            if check_connection {
+                let config_path = cli.config.map(PathBuf::from);
+                handle_check_connection_cmd(cli.name, verbose, config_path).await;
+            } else if interactive {
+                let fmt: cli::OutputFormat = format.parse().unwrap_or(cli::OutputFormat::Table);
+                let args = cli::CliArgs {
+                    sql,
+                    file,
+                    connection_name: cli.name,
+                    config_path: cli.config,
+                    format: fmt,
+                    statement_timeout,
+                    connection_max_lifetime,
+                    no_history,
+                };
+                if let Err(e) = interactive::run_interactive(args).await {
+                    eprintln!("error: {}", e);
+                    std::process::exit(1);
+                }
+            } else {
+                let fmt: cli::OutputFormat = format.parse().unwrap_or(cli::OutputFormat::Table);
+                let args = cli::CliArgs {
+                    sql,
+                    file,
+                    connection_name: cli.name,
+                    config_path: cli.config,
+                    format: fmt,
+                    statement_timeout,
+                    connection_max_lifetime,
+                    no_history,
+                };
+                if let Err(e) = cli::run_cli(args).await {
+                    eprintln!("error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
 }

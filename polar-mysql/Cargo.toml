@@ -3,11 +3,32 @@ name = "polar-mysql"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "CLI and MCP server for MySQL/PolarDB-X database introspection"
 
 [[bin]]
 name = "polar-mysql"
 path = "src/main.rs"
 
+[features]
+default = []
+integration = []
+
 [dependencies]
 mysql_async = "0.37"
 tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+rmcp = { version = "1.5.0", features = ["server", "macros", "transport-io"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1.0"
+toml = "0.8"
+dirs = "6"
+keyring = { version = "3", features = ["apple-native", "sync-secret-service", "crypto-rust"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-appender = "0.2"
+rustyline = "18"
+rustyline-derive = "0.12"
+rpassword = "7"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+csv = "1"
