@@ -612,7 +612,11 @@ pub(crate) async fn run_interactive(args: CliArgs) -> Result<(), String> {
     if let Some(p) = &history_path {
         let _ = rl.save_history(p);
     }
-    mysql_async::Pool::clone(&pool).disconnect().await.ok();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        mysql_async::Pool::clone(&pool).disconnect(),
+    )
+    .await;
     Ok(())
 }
 

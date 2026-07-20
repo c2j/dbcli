@@ -330,8 +330,12 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<(), String> {
     // 9. Apply timeout_action (disconnect recycles connection)
     crate::connection::apply_timeout_action(&mut conn, args.timeout_action.as_deref()).await;
 
-    // 10. Disconnect
-    Pool::clone(&pool).disconnect().await.ok();
+    // 10. Disconnect (with timeout to avoid hanging on graceful shutdown)
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        Pool::clone(&pool).disconnect(),
+    )
+    .await;
 
     Ok(())
 }
