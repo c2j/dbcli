@@ -1,0 +1,13 @@
+[package]
+name = "polar-mysql"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "polar-mysql"
+path = "src/main.rs"
+
+[dependencies]
+mysql_async = "0.37"
+tokio = { version = "1", features = ["full"] }
