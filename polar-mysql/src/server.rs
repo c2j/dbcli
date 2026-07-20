@@ -1,9 +1,8 @@
 use mysql_async::prelude::Queryable;
 use rmcp::{
-    ServerHandler,
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, ErrorData as McpError},
-    tool, tool_handler, tool_router,
+    tool, tool_handler, tool_router, ServerHandler,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -371,7 +370,11 @@ impl MysqlMcp {
                 ));
             }
             Err(e) => {
-                return Err(query_error("get_database_info", queries::DATABASE_INFO, &e.to_string()));
+                return Err(query_error(
+                    "get_database_info",
+                    queries::DATABASE_INFO,
+                    &e.to_string(),
+                ));
             }
         };
 
@@ -408,7 +411,11 @@ impl MysqlMcp {
         let rows: Vec<mysql_async::Row> = match conn.query(queries::LIST_TABLES).await {
             Ok(rows) => rows,
             Err(e) => {
-                return Err(query_error("list_tables", queries::LIST_TABLES, &e.to_string()));
+                return Err(query_error(
+                    "list_tables",
+                    queries::LIST_TABLES,
+                    &e.to_string(),
+                ));
             }
         };
 
@@ -455,15 +462,17 @@ impl MysqlMcp {
             .await?;
 
         // Get columns
-        let columns_rows: Vec<mysql_async::Row> = match conn
-            .exec(queries::TABLE_COLUMNS, (schema, table))
-            .await
-        {
-            Ok(rows) => rows,
-            Err(e) => {
-                return Err(query_error("get_table_metadata (columns)", queries::TABLE_COLUMNS, &e.to_string()));
-            }
-        };
+        let columns_rows: Vec<mysql_async::Row> =
+            match conn.exec(queries::TABLE_COLUMNS, (schema, table)).await {
+                Ok(rows) => rows,
+                Err(e) => {
+                    return Err(query_error(
+                        "get_table_metadata (columns)",
+                        queries::TABLE_COLUMNS,
+                        &e.to_string(),
+                    ));
+                }
+            };
 
         let columns: Vec<serde_json::Value> = columns_rows
             .iter()
@@ -481,15 +490,17 @@ impl MysqlMcp {
             .collect();
 
         // Get indexes
-        let idx_rows: Vec<mysql_async::Row> = match conn
-            .exec(queries::TABLE_INDEXES, (schema, table))
-            .await
-        {
-            Ok(rows) => rows,
-            Err(e) => {
-                return Err(query_error("get_table_metadata (indexes)", queries::TABLE_INDEXES, &e.to_string()));
-            }
-        };
+        let idx_rows: Vec<mysql_async::Row> =
+            match conn.exec(queries::TABLE_INDEXES, (schema, table)).await {
+                Ok(rows) => rows,
+                Err(e) => {
+                    return Err(query_error(
+                        "get_table_metadata (indexes)",
+                        queries::TABLE_INDEXES,
+                        &e.to_string(),
+                    ));
+                }
+            };
 
         let indexes: Vec<serde_json::Value> = idx_rows
             .iter()
@@ -539,7 +550,9 @@ impl MysqlMcp {
             );
             return Err(McpError::invalid_request(
                 "invalid_query",
-                Some(json!({ "message": "Only SELECT, EXPLAIN, SHOW, and DESCRIBE queries are allowed" })),
+                Some(
+                    json!({ "message": "Only SELECT, EXPLAIN, SHOW, and DESCRIBE queries are allowed" }),
+                ),
             ));
         }
 
@@ -643,7 +656,7 @@ impl MysqlMcp {
         } else {
             let format_clause = match fmt.to_uppercase().as_str() {
                 "JSON" => "FORMAT=JSON",
-                _ => "",  // TEXT / TRADITIONAL is the default EXPLAIN output
+                _ => "", // TEXT / TRADITIONAL is the default EXPLAIN output
             };
             if format_clause.is_empty() {
                 format!("EXPLAIN {}", params.sql)
@@ -655,7 +668,11 @@ impl MysqlMcp {
         let rows: Vec<mysql_async::Row> = match conn.query(&explain_sql).await {
             Ok(rows) => rows,
             Err(e) => {
-                return Err(query_error("get_execution_plan", &explain_sql, &e.to_string()));
+                return Err(query_error(
+                    "get_execution_plan",
+                    &explain_sql,
+                    &e.to_string(),
+                ));
             }
         };
 

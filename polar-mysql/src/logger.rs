@@ -16,8 +16,8 @@ pub(crate) fn init_logging() {
     }
 
     let file_appender = tracing_appender::rolling::daily(&dir, "polar-mysql.log");
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("polar_mysql=info"));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("polar_mysql=info"));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)

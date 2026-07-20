@@ -46,12 +46,16 @@ impl TimeoutConfig {
         let base = base.unwrap_or(&default_tc);
 
         let statement_timeout = match statement_timeout {
-            Some(s) => Some(parse_duration(s).map_err(|e| format!("Invalid statement_timeout: {}", e))?),
+            Some(s) => {
+                Some(parse_duration(s).map_err(|e| format!("Invalid statement_timeout: {}", e))?)
+            }
             None => base.statement_timeout,
         };
 
         let connection_max_lifetime = match connection_max_lifetime {
-            Some(s) => Some(parse_duration(s).map_err(|e| format!("Invalid connection_max_lifetime: {}", e))?),
+            Some(s) => Some(
+                parse_duration(s).map_err(|e| format!("Invalid connection_max_lifetime: {}", e))?,
+            ),
             None => base.connection_max_lifetime,
         };
 
@@ -78,12 +82,9 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
         Ok(Duration::from_secs_f64(hours * 3600.0))
     } else {
         // Try plain number as seconds
-        let secs: f64 = s.parse().map_err(|_| {
-            format!(
-                "cannot parse '{}': expected e.g. 30s, 5min, 2h, 500ms",
-                s
-            )
-        })?;
+        let secs: f64 = s
+            .parse()
+            .map_err(|_| format!("cannot parse '{}': expected e.g. 30s, 5min, 2h, 500ms", s))?;
         Ok(Duration::from_secs_f64(secs))
     }
 }
@@ -177,8 +178,7 @@ pub(crate) fn find_config_path(opt: Option<PathBuf>) -> Result<PathBuf, String> 
                     return Ok(p.clone());
                 }
             }
-            Err(
-                "No connection configuration found. Use one of:\n\
+            Err("No connection configuration found. Use one of:\n\
                  \n\
                  1. Set POLARDB_MYSQL_URL environment variable\n\
                     export POLARDB_MYSQL_URL=\"mysql://user:password@host:port/database\"\n\
@@ -192,8 +192,7 @@ pub(crate) fn find_config_path(opt: Option<PathBuf>) -> Result<PathBuf, String> 
                  3. Pass --config <path> to specify a config file\n\
                  \n\
                  Password will be migrated to OS keychain on first successful connection."
-                    .to_string(),
-            )
+                .to_string())
         }
     }
 }
@@ -274,8 +273,14 @@ pub(crate) fn resolve_named_connections(multi: &MultiConfig) -> Vec<NamedConnect
                 password: conn.password.clone(),
                 database: conn.database.clone(),
                 sslmode: conn.sslmode.clone(),
-                statement_timeout: conn.statement_timeout.clone().or(multi.statement_timeout.clone()),
-                connection_max_lifetime: conn.connection_max_lifetime.clone().or(multi.connection_max_lifetime.clone()),
+                statement_timeout: conn
+                    .statement_timeout
+                    .clone()
+                    .or(multi.statement_timeout.clone()),
+                connection_max_lifetime: conn
+                    .connection_max_lifetime
+                    .clone()
+                    .or(multi.connection_max_lifetime.clone()),
             })
             .collect();
 
@@ -337,12 +342,21 @@ fn build_mysql_url(
         None => String::new(),
     };
     let ssl_part = match sslmode {
-        Some(mode) if mode.eq_ignore_ascii_case("require") || mode.eq_ignore_ascii_case("required") || mode.eq_ignore_ascii_case("true") || mode.eq_ignore_ascii_case("1") || mode.eq_ignore_ascii_case("yes") => {
+        Some(mode)
+            if mode.eq_ignore_ascii_case("require")
+                || mode.eq_ignore_ascii_case("required")
+                || mode.eq_ignore_ascii_case("true")
+                || mode.eq_ignore_ascii_case("1")
+                || mode.eq_ignore_ascii_case("yes") =>
+        {
             "?ssl-mode=REQUIRED"
         }
         _ => "",
     };
-    format!("mysql://{}{}:{}{}{}", auth_part, host, port, db_part, ssl_part)
+    format!(
+        "mysql://{}{}:{}{}{}",
+        auth_part, host, port, db_part, ssl_part
+    )
 }
 
 fn urlencode(s: &str) -> String {
@@ -547,17 +561,24 @@ pub(crate) fn build_lazy_resolver(
             _ => unreachable!(),
         };
 
-        let host = host.as_deref().ok_or_else(|| {
-            format!("connection '{}' has no host or url", name_clone)
-        })?;
+        let host = host
+            .as_deref()
+            .ok_or_else(|| format!("connection '{}' has no host or url", name_clone))?;
         let port = port.unwrap_or(3306);
-        let user = user.as_deref().ok_or_else(|| {
-            format!("connection '{}' has no user or url", name_clone)
-        })?;
+        let user = user
+            .as_deref()
+            .ok_or_else(|| format!("connection '{}' has no user or url", name_clone))?;
         let database = database.as_deref();
         let sslmode = sslmode.as_deref();
 
-        Ok(build_mysql_url(host, port, user, password.as_deref(), database, sslmode))
+        Ok(build_mysql_url(
+            host,
+            port,
+            user,
+            password.as_deref(),
+            database,
+            sslmode,
+        ))
     });
 
     let timeout_config = TimeoutConfig::from_overrides(
@@ -665,7 +686,14 @@ mod tests {
 
     #[test]
     fn test_build_url_with_password() {
-        let url = build_mysql_url("127.0.0.1", 3306, "mcp", Some("pass"), Some("prototype"), None);
+        let url = build_mysql_url(
+            "127.0.0.1",
+            3306,
+            "mcp",
+            Some("pass"),
+            Some("prototype"),
+            None,
+        );
         assert_eq!(url, "mysql://mcp:pass@127.0.0.1:3306/prototype");
     }
 

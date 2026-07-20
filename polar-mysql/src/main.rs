@@ -10,7 +10,7 @@ mod server;
 use clap::{Parser, Subcommand};
 use keyring::Entry;
 use mysql_async::prelude::*;
-use rmcp::{ServiceExt, transport::stdio};
+use rmcp::{transport::stdio, ServiceExt};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use crate::config::{
-    KEYRING_SERVICE, LazyConnectionEntry, PasswordSource, ResolvedConnection, TimeoutConfig,
     default_config_path, read_config, resolve_all_connections_lazy, resolve_env_var_connection,
     resolve_single_connection, rewrite_password_to_sentinel, store_keyring_password,
+    LazyConnectionEntry, PasswordSource, ResolvedConnection, TimeoutConfig, KEYRING_SERVICE,
 };
 use crate::server::{format_error_chain, redact_url, MysqlMcp};
 
@@ -308,7 +308,10 @@ async fn try_connect_tls_skip_verify(
     url: &str,
 ) -> Result<(mysql_async::Conn, Duration), Box<dyn std::error::Error + Send + Sync>> {
     let separator = if url.contains('?') { "&" } else { "?" };
-    let tls_url = format!("{}?require_ssl=true&verify_ca=false&verify_identity=false", url);
+    let tls_url = format!(
+        "{}?require_ssl=true&verify_ca=false&verify_identity=false",
+        url
+    );
     // If URL already has query params, replace the leading ? with &
     let tls_url = if separator == "&" {
         tls_url.replacen('?', "&", 1)
@@ -403,7 +406,11 @@ async fn handle_check_connection(resolved: &ResolvedConnection, verbose: bool) {
                 Ok(Some(v)) => Some(v),
                 _ => None,
             };
-            eprintln!("  ✓ NoTls  — {}ms  {}", elapsed.as_millis(), ver.as_deref().unwrap_or("(unknown)"));
+            eprintln!(
+                "  ✓ NoTls  — {}ms  {}",
+                elapsed.as_millis(),
+                ver.as_deref().unwrap_or("(unknown)")
+            );
             results.push(TlsCheckResult {
                 mode: "NoTls",
                 success: true,
@@ -431,14 +438,21 @@ async fn handle_check_connection(resolved: &ResolvedConnection, verbose: bool) {
 
     // Migrate plaintext password to keychain on first success
     if results.iter().any(|r| r.success) {
-        if let (Some(path), Some(plaintext)) = (&resolved.config_path, &resolved.plaintext_password) {
-            info!("migrating plaintext password to OS keychain for '{}'", resolved.keyring_username);
+        if let (Some(path), Some(plaintext)) = (&resolved.config_path, &resolved.plaintext_password)
+        {
+            info!(
+                "migrating plaintext password to OS keychain for '{}'",
+                resolved.keyring_username
+            );
             if let Err(e) = store_keyring_password(&resolved.keyring_username, plaintext) {
                 warn!("failed to store password in keychain: {}", e);
             } else if let Err(e) = rewrite_password_to_sentinel(path, &resolved.name) {
                 warn!("failed to update config file: {}", e);
             } else {
-                info!("password migrated to OS keychain for '{}'", resolved.keyring_username);
+                info!(
+                    "password migrated to OS keychain for '{}'",
+                    resolved.keyring_username
+                );
             }
         }
     }
@@ -451,7 +465,11 @@ async fn handle_check_connection(resolved: &ResolvedConnection, verbose: bool) {
                 Ok(Some(v)) => Some(v),
                 _ => None,
             };
-            eprintln!("  ✓ TLS(skip-verify)  — {}ms  {}", elapsed.as_millis(), ver.as_deref().unwrap_or("(unknown)"));
+            eprintln!(
+                "  ✓ TLS(skip-verify)  — {}ms  {}",
+                elapsed.as_millis(),
+                ver.as_deref().unwrap_or("(unknown)")
+            );
             results.push(TlsCheckResult {
                 mode: "TLS-skip-verify",
                 success: true,
@@ -479,7 +497,11 @@ async fn handle_check_connection(resolved: &ResolvedConnection, verbose: bool) {
                 Ok(Some(v)) => Some(v),
                 _ => None,
             };
-            eprintln!("  ✓ TLS(verify)  — {}ms  {}", elapsed.as_millis(), ver.as_deref().unwrap_or("(unknown)"));
+            eprintln!(
+                "  ✓ TLS(verify)  — {}ms  {}",
+                elapsed.as_millis(),
+                ver.as_deref().unwrap_or("(unknown)")
+            );
             results.push(TlsCheckResult {
                 mode: "TLS-verify",
                 success: true,

@@ -7,8 +7,8 @@ use mysql_async::Pool;
 use tracing::{info, warn};
 
 use crate::config::{
-    TimeoutConfig, read_config, resolve_env_var_connection, resolve_single_connection,
-    rewrite_password_to_sentinel, store_keyring_password,
+    read_config, resolve_env_var_connection, resolve_single_connection,
+    rewrite_password_to_sentinel, store_keyring_password, TimeoutConfig,
 };
 use crate::connection::do_connect;
 use crate::output;
@@ -189,8 +189,7 @@ pub(crate) fn render_result(
             } else {
                 format!("{} rows", result.row_count)
             };
-            writeln!(writer, "({})", count_label)
-                .map_err(|e| format!("write error: {}", e))?;
+            writeln!(writer, "({})", count_label).map_err(|e| format!("write error: {}", e))?;
         }
         OutputFormat::Json => {
             let v = serde_json::json!({
@@ -220,8 +219,7 @@ pub(crate) fn render_result(
             } else {
                 format!("{} rows", result.row_count)
             };
-            writeln!(writer, "({})", count_label)
-                .map_err(|e| format!("write error: {}", e))?;
+            writeln!(writer, "({})", count_label).map_err(|e| format!("write error: {}", e))?;
         }
         OutputFormat::Csv => {
             let mut csv_writer = csv::Writer::from_writer(writer);
@@ -303,7 +301,10 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<(), String> {
 
     // 6. Migrate plaintext password to OS keychain on successful connection
     if let (Some(path), Some(plaintext)) = (&target.config_path, &target.plaintext_password) {
-        info!("migrating plaintext password to OS keychain for '{}'", target.keyring_username);
+        info!(
+            "migrating plaintext password to OS keychain for '{}'",
+            target.keyring_username
+        );
         match store_keyring_password(&target.keyring_username, plaintext) {
             Ok(()) => {
                 if let Err(e) = rewrite_password_to_sentinel(path, &target.name) {
@@ -312,7 +313,10 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<(), String> {
                         e
                     );
                 } else {
-                    info!("password migrated to OS keychain for '{}'", target.keyring_username);
+                    info!(
+                        "password migrated to OS keychain for '{}'",
+                        target.keyring_username
+                    );
                 }
             }
             Err(e) => {
@@ -495,10 +499,22 @@ mod tests {
 
     #[test]
     fn test_output_format_from_str() {
-        assert!(matches!("table".parse::<OutputFormat>().unwrap(), OutputFormat::Table));
-        assert!(matches!("json".parse::<OutputFormat>().unwrap(), OutputFormat::Json));
-        assert!(matches!("vertical".parse::<OutputFormat>().unwrap(), OutputFormat::Vertical));
-        assert!(matches!("csv".parse::<OutputFormat>().unwrap(), OutputFormat::Csv));
+        assert!(matches!(
+            "table".parse::<OutputFormat>().unwrap(),
+            OutputFormat::Table
+        ));
+        assert!(matches!(
+            "json".parse::<OutputFormat>().unwrap(),
+            OutputFormat::Json
+        ));
+        assert!(matches!(
+            "vertical".parse::<OutputFormat>().unwrap(),
+            OutputFormat::Vertical
+        ));
+        assert!(matches!(
+            "csv".parse::<OutputFormat>().unwrap(),
+            OutputFormat::Csv
+        ));
         assert!("invalid".parse::<OutputFormat>().is_err());
     }
 }

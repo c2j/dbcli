@@ -7,16 +7,14 @@ use tracing::{debug, info};
 pub(crate) async fn do_connect(
     url: &str,
     timeout_config: Option<&crate::config::TimeoutConfig>,
-) -> Result<
-    (Arc<mysql_async::Pool>, mysql_async::Conn),
-    Box<dyn std::error::Error + Send + Sync>,
-> {
+) -> Result<(Arc<mysql_async::Pool>, mysql_async::Conn), Box<dyn std::error::Error + Send + Sync>> {
     let opts = OptsBuilder::from_opts(mysql_async::Opts::from_url(url)?);
 
     let pool = mysql_async::Pool::new(opts);
-    let mut conn = pool.get_conn().await.map_err(|e| {
-        format!("Connection failed: {}", e)
-    })?;
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| format!("Connection failed: {}", e))?;
 
     if let Some(tc) = timeout_config {
         if let Some(st) = tc.statement_timeout {
@@ -42,10 +40,7 @@ pub(crate) async fn do_connect(
 /// Apply timeout_action behaviour on a connection after a timeout.
 /// "cancel" (default): no-op, connection stays alive.
 /// "disconnect": close the current connection so the pool recycles it.
-pub(crate) async fn apply_timeout_action(
-    conn: &mut mysql_async::Conn,
-    action: Option<&str>,
-) {
+pub(crate) async fn apply_timeout_action(conn: &mut mysql_async::Conn, action: Option<&str>) {
     match action {
         Some("disconnect") => {
             info!("timeout_action=disconnect: closing connection for pool recycling");

@@ -2,22 +2,20 @@ use std::borrow::Cow;
 use std::io::Write;
 use std::path::PathBuf;
 
-use rustyline::Editor;
 use rustyline::config::Configurer;
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
 use rustyline::history::DefaultHistory;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
+use rustyline::Editor;
 use rustyline_derive::{Completer, Helper, Hinter};
 
 use tracing::{info, warn};
 
-use crate::cli::{
-    CliArgs, OutputFormat, QueryResult, execute_query, render_result,
-};
+use crate::cli::{execute_query, render_result, CliArgs, OutputFormat, QueryResult};
 use crate::config::{
-    TimeoutConfig, read_config, resolve_env_var_connection, resolve_single_connection,
-    rewrite_password_to_sentinel, store_keyring_password,
+    read_config, resolve_env_var_connection, resolve_single_connection,
+    rewrite_password_to_sentinel, store_keyring_password, TimeoutConfig,
 };
 use crate::connection::do_connect;
 use crate::server::format_error_chain;
@@ -218,11 +216,15 @@ fn handle_dot_command(line: &str, ctx: &mut ReplContext) -> DotAction {
         ".help" | "?" => {
             println!(".help / ?            Show this help message");
             println!(".exit / .quit        Exit the REPL");
-            println!(".connect [<name>]    Reconnect (to <name>, or current connection if omitted)");
+            println!(
+                ".connect [<name>]    Reconnect (to <name>, or current connection if omitted)"
+            );
             println!(".history             Show SQL execution history");
             println!(".clear / .cls        Clear the terminal screen");
             println!(".output [<file>]     Redirect SQL output to file, or back to stdout");
-            println!(".save <file> [fmt]   Save last query result to file (table/json/vertical/csv)");
+            println!(
+                ".save <file> [fmt]   Save last query result to file (table/json/vertical/csv)"
+            );
             DotAction { exit: false }
         }
 
@@ -266,8 +268,7 @@ fn handle_dot_command(line: &str, ctx: &mut ReplContext) -> DotAction {
                         .open(&file_path)
                     {
                         Ok(file) => {
-                            *ctx.output_target =
-                                OutputTarget::File(file);
+                            *ctx.output_target = OutputTarget::File(file);
                             println!("output redirected to {} (append)", file_path);
                         }
                         Err(e) => {
@@ -408,7 +409,10 @@ async fn connect(
         .map_err(|e| format!("Connection failed: {}", format_error_chain(e.as_ref())))?;
 
     if let (Some(path), Some(plaintext)) = (&target.config_path, &target.plaintext_password) {
-        info!("migrating plaintext password to OS keychain for '{}'", target.keyring_username);
+        info!(
+            "migrating plaintext password to OS keychain for '{}'",
+            target.keyring_username
+        );
         match store_keyring_password(&target.keyring_username, plaintext) {
             Ok(()) => {
                 if let Err(e) = rewrite_password_to_sentinel(path, &target.name) {
@@ -417,7 +421,10 @@ async fn connect(
                         e
                     );
                 } else {
-                    info!("password migrated to OS keychain for '{}'", target.keyring_username);
+                    info!(
+                        "password migrated to OS keychain for '{}'",
+                        target.keyring_username
+                    );
                 }
             }
             Err(e) => {
@@ -520,10 +527,6 @@ pub(crate) async fn run_interactive(args: CliArgs) -> Result<(), String> {
                         target = new_target;
                         pool = new_pool;
                         conn = new_conn;
-                        // Load history for new connection
-                        if target.name != target.name {
-                            // only if actually changed (simplified)
-                        }
                         history_path = if !args.no_history {
                             history_path_for(&target.name)
                         } else {
@@ -589,7 +592,11 @@ pub(crate) async fn run_interactive(args: CliArgs) -> Result<(), String> {
                     // Apply timeout_action on query error
                     if args.timeout_action.as_deref() == Some("disconnect") {
                         eprintln!("timeout_action=disconnect: reconnecting...");
-                        crate::connection::apply_timeout_action(&mut conn, args.timeout_action.as_deref()).await;
+                        crate::connection::apply_timeout_action(
+                            &mut conn,
+                            args.timeout_action.as_deref(),
+                        )
+                        .await;
                         match connect(&target, &effective_timeout).await {
                             Ok((new_pool, new_conn)) => {
                                 pool = new_pool;
