@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use mysql_async::prelude::*;
 use mysql_async::OptsBuilder;
-use tracing::info;
+use tracing::{debug, info};
 
 pub(crate) async fn do_connect(
     url: &str,
@@ -37,6 +37,25 @@ pub(crate) async fn do_connect(
     }
 
     Ok((Arc::new(pool), conn))
+}
+
+/// Apply timeout_action behaviour on a connection after a timeout.
+/// "cancel" (default): no-op, connection stays alive.
+/// "disconnect": close the current connection so the pool recycles it.
+pub(crate) async fn apply_timeout_action(
+    conn: &mut mysql_async::Conn,
+    action: Option<&str>,
+) {
+    match action {
+        Some("disconnect") => {
+            info!("timeout_action=disconnect: closing connection for pool recycling");
+            let _ = conn.query_drop("KILL CONNECTION CONNECTION_ID()").await;
+        }
+        _ => {
+            // "cancel" or unspecified — connection stays alive
+            debug!("timeout_action=cancel (or default): keeping connection alive");
+        }
+    }
 }
 
 #[allow(dead_code)]

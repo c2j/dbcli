@@ -106,11 +106,26 @@ pub struct ExecuteQueryParams {
 pub struct GetExecutionPlanParams {
     pub sql: String,
     pub analyze: Option<bool>,
+    /// Output format: "TEXT" (default, equivalent to FORMAT=TRADITIONAL) or "JSON"
+    #[serde(default)]
+    pub format: Option<String>,
     /// Optional per-call statement timeout in milliseconds.
     #[serde(default)]
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub connection_name: Option<String>,
+}
+
+/// Append `LIMIT N` to a SQL SELECT query if it does not already have LIMIT.
+fn append_limit_if_needed(sql: &str, max_rows: usize) -> String {
+    let trimmed = sql.trim();
+    let upper = trimmed.to_uppercase();
+    // Check for existing LIMIT or TOP clause
+    if !upper.contains("LIMIT") && !upper.contains("TOP ") {
+        format!("{} LIMIT {}", trimmed, max_rows)
+    } else {
+        trimmed.to_string()
+    }
 }
 
 type ResolveFn = Arc<dyn (Fn() -> Result<String, String>) + Send + Sync>;
@@ -538,7 +553,11 @@ impl MysqlMcp {
             let _ = conn.query_drop(&set_sql).await;
         }
 
-        let rows: Vec<mysql_async::Row> = match conn.query(trimmed).await {
+        // Enforce max_rows at the server level by appending LIMIT
+        let max_rows = params.max_rows.unwrap_or(1000).clamp(1, 10000);
+        let sql_to_execute = append_limit_if_needed(trimmed, max_rows);
+
+        let rows: Vec<mysql_async::Row> = match conn.query(&sql_to_execute).await {
             Ok(rows) => rows,
             Err(e) => {
                 return Err(query_error("execute_query", trimmed, &e.to_string()));
@@ -551,7 +570,6 @@ impl MysqlMcp {
             )]));
         }
 
-        let max_rows = params.max_rows.unwrap_or(1000).clamp(1, 10000);
         let total_count = rows.len();
         let truncated = total_count > max_rows;
         let visible = if truncated {
@@ -619,10 +637,19 @@ impl MysqlMcp {
         }
 
         let analyze = params.analyze.unwrap_or(false);
+        let fmt = params.format.as_deref().unwrap_or("TEXT");
         let explain_sql = if analyze {
             format!("EXPLAIN ANALYZE {}", params.sql)
         } else {
-            format!("EXPLAIN FORMAT=JSON {}", params.sql)
+            let format_clause = match fmt.to_uppercase().as_str() {
+                "JSON" => "FORMAT=JSON",
+                _ => "",  // TEXT / TRADITIONAL is the default EXPLAIN output
+            };
+            if format_clause.is_empty() {
+                format!("EXPLAIN {}", params.sql)
+            } else {
+                format!("EXPLAIN {} {}", format_clause, params.sql)
+            }
         };
 
         let rows: Vec<mysql_async::Row> = match conn.query(&explain_sql).await {

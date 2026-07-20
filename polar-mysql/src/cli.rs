@@ -4,6 +4,8 @@ use std::str::FromStr;
 use mysql_async::prelude::*;
 use mysql_async::Pool;
 
+use tracing::{info, warn};
+
 use crate::config::{
     TimeoutConfig, read_config, resolve_env_var_connection, resolve_single_connection,
     rewrite_password_to_sentinel, store_keyring_password,
@@ -53,6 +55,7 @@ pub(crate) struct CliArgs {
     pub statement_timeout: Option<String>,
     pub connection_max_lifetime: Option<String>,
     pub no_history: bool,
+    pub timeout_action: Option<String>,
 }
 
 fn value_to_compact_string(v: &serde_json::Value) -> String {
@@ -300,17 +303,20 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<(), String> {
 
     // 6. Migrate plaintext password to OS keychain on successful connection
     if let (Some(path), Some(plaintext)) = (&target.config_path, &target.plaintext_password) {
+        info!("migrating plaintext password to OS keychain for '{}'", target.keyring_username);
         match store_keyring_password(&target.keyring_username, plaintext) {
             Ok(()) => {
                 if let Err(e) = rewrite_password_to_sentinel(path, &target.name) {
-                    eprintln!(
-                        "warning: password stored in keychain but failed to update config: {}",
+                    warn!(
+                        "password stored in keychain but failed to update config: {}",
                         e
                     );
+                } else {
+                    info!("password migrated to OS keychain for '{}'", target.keyring_username);
                 }
             }
             Err(e) => {
-                eprintln!("warning: failed to migrate password to keychain: {}", e);
+                warn!("failed to migrate password to keychain: {}", e);
             }
         }
     }
@@ -321,7 +327,10 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<(), String> {
     // 8. Render output
     render_result(&result, &mut std::io::stdout(), args.format)?;
 
-    // 9. Disconnect
+    // 9. Apply timeout_action (disconnect recycles connection)
+    crate::connection::apply_timeout_action(&mut conn, args.timeout_action.as_deref()).await;
+
+    // 10. Disconnect
     Pool::clone(&pool).disconnect().await.ok();
 
     Ok(())

@@ -2,7 +2,7 @@ pub const DATABASE_INFO: &str = "
 SELECT
     VERSION() AS version,
     DATABASE() AS `database`,
-    CURRENT_USER() AS current_user,
+    CURRENT_USER() AS `current_user`,
     @@hostname AS hostname,
     @@port AS port,
     @@version_compile_os AS os,

@@ -20,7 +20,7 @@ use tracing::{error, info, warn};
 use crate::config::{
     KEYRING_SERVICE, LazyConnectionEntry, PasswordSource, ResolvedConnection, TimeoutConfig,
     default_config_path, read_config, resolve_all_connections_lazy, resolve_env_var_connection,
-    resolve_single_connection, store_keyring_password,
+    resolve_single_connection, rewrite_password_to_sentinel, store_keyring_password,
 };
 use crate::server::{format_error_chain, redact_url, MysqlMcp};
 
@@ -93,6 +93,10 @@ enum Commands {
         /// Do not read or write persistent per-connection SQL history
         #[arg(long)]
         no_history: bool,
+
+        /// Timeout action: "cancel" (default, keep connection alive) or "disconnect" (recycle connection)
+        #[arg(long)]
+        timeout_action: Option<String>,
     },
 }
 
@@ -283,9 +287,59 @@ fn print_verbose_details(details: &VerboseDetails) {
     );
 }
 
+#[allow(dead_code)]
+struct TlsCheckResult {
+    mode: &'static str,
+    success: bool,
+    version: Option<String>,
+    elapsed_ms: u128,
+}
+
+async fn try_connect_plain(
+    url: &str,
+) -> Result<(mysql_async::Conn, Duration), Box<dyn std::error::Error + Send + Sync>> {
+    let start = Instant::now();
+    let (_pool, conn) = connection::do_connect(url, None).await?;
+    let elapsed = start.elapsed();
+    Ok((conn, elapsed))
+}
+
+async fn try_connect_tls_skip_verify(
+    url: &str,
+) -> Result<(mysql_async::Conn, Duration), Box<dyn std::error::Error + Send + Sync>> {
+    let separator = if url.contains('?') { "&" } else { "?" };
+    let tls_url = format!("{}?require_ssl=true&verify_ca=false&verify_identity=false", url);
+    // If URL already has query params, replace the leading ? with &
+    let tls_url = if separator == "&" {
+        tls_url.replacen('?', "&", 1)
+    } else {
+        tls_url
+    };
+    let start = Instant::now();
+    let (_pool, conn) = connection::do_connect(&tls_url, None).await?;
+    let elapsed = start.elapsed();
+    Ok((conn, elapsed))
+}
+
+async fn try_connect_tls_verify(
+    url: &str,
+) -> Result<(mysql_async::Conn, Duration), Box<dyn std::error::Error + Send + Sync>> {
+    let separator = if url.contains('?') { "&" } else { "?" };
+    let tls_url = format!("{}?require_ssl=true", url);
+    let tls_url = if separator == "&" {
+        tls_url.replacen('?', "&", 1)
+    } else {
+        tls_url
+    };
+    let start = Instant::now();
+    let (_pool, conn) = connection::do_connect(&tls_url, None).await?;
+    let elapsed = start.elapsed();
+    Ok((conn, elapsed))
+}
+
 async fn handle_check_connection(resolved: &ResolvedConnection, verbose: bool) {
-    let url = &resolved.connection_url;
-    let redacted = redact_url(url);
+    let base_url = &resolved.connection_url;
+    let _redacted = redact_url(base_url);
 
     eprintln!("Connection: {}", resolved.name);
     eprintln!();
@@ -339,47 +393,136 @@ async fn handle_check_connection(resolved: &ResolvedConnection, verbose: bool) {
         }
     }
 
-    eprintln!("[1/1] Connecting to {} ...", redacted);
-    let start = Instant::now();
-    let version = match connection::do_connect(url, None).await {
-        Ok((_pool, mut conn)) => {
-            let elapsed = start.elapsed();
-            let ver: Option<String> = match conn.query_first("SELECT VERSION()").await {
-                Ok(Some(v)) => v,
-                _ => Some("(unknown)".to_string()),
-            };
-            let version = ver.unwrap_or_else(|| "(unknown)".to_string());
-            eprintln!("  Connected in {}ms", elapsed.as_millis());
-            eprintln!("  {}", version);
+    let mut results: Vec<TlsCheckResult> = Vec::new();
 
+    // Pass 1: No TLS
+    eprintln!("[1/3] Connecting without TLS (plain TCP) ...");
+    match try_connect_plain(base_url).await {
+        Ok((mut conn, elapsed)) => {
+            let ver: Option<String> = match conn.query_first("SELECT VERSION()").await {
+                Ok(Some(v)) => Some(v),
+                _ => None,
+            };
+            eprintln!("  ✓ NoTls  — {}ms  {}", elapsed.as_millis(), ver.as_deref().unwrap_or("(unknown)"));
+            results.push(TlsCheckResult {
+                mode: "NoTls",
+                success: true,
+                version: ver,
+                elapsed_ms: elapsed.as_millis(),
+            });
             if verbose {
-                match query_verbose_details(url, elapsed).await {
+                match query_verbose_details(base_url, elapsed).await {
                     Ok(details) => print_verbose_details(&details),
                     Err(e) => eprintln!("  [verbose] Failed to get details: {}", e),
                 }
             }
-
-            eprintln!();
-            eprintln!("  SUCCESS");
-            version
         }
         Err(e) => {
             let chain = format_error_chain(e.as_ref());
-            eprintln!("  FAILED: {}", chain);
-            eprintln!();
-            eprintln!("  Possible causes:");
-            eprintln!("  - Database server is not running or not reachable");
-            eprintln!("  - Firewall blocking port");
-            eprintln!("  - Wrong host, port, user, or password");
-            eprintln!("  - Server requires SSL/TLS (use sslmode in config)");
-            std::process::exit(1);
+            eprintln!("  ✗ NoTls  — FAILED: {}", chain);
+            results.push(TlsCheckResult {
+                mode: "NoTls",
+                success: false,
+                version: None,
+                elapsed_ms: 0,
+            });
         }
-    };
+    }
+
+    // Migrate plaintext password to keychain on first success
+    if results.iter().any(|r| r.success) {
+        if let (Some(path), Some(plaintext)) = (&resolved.config_path, &resolved.plaintext_password) {
+            info!("migrating plaintext password to OS keychain for '{}'", resolved.keyring_username);
+            if let Err(e) = store_keyring_password(&resolved.keyring_username, plaintext) {
+                warn!("failed to store password in keychain: {}", e);
+            } else if let Err(e) = rewrite_password_to_sentinel(path, &resolved.name) {
+                warn!("failed to update config file: {}", e);
+            } else {
+                info!("password migrated to OS keychain for '{}'", resolved.keyring_username);
+            }
+        }
+    }
+
+    // Pass 2: TLS with skip verify
+    eprintln!("[2/3] Connecting with TLS (skip cert verify) ...");
+    match try_connect_tls_skip_verify(base_url).await {
+        Ok((mut conn, elapsed)) => {
+            let ver: Option<String> = match conn.query_first("SELECT VERSION()").await {
+                Ok(Some(v)) => Some(v),
+                _ => None,
+            };
+            eprintln!("  ✓ TLS(skip-verify)  — {}ms  {}", elapsed.as_millis(), ver.as_deref().unwrap_or("(unknown)"));
+            results.push(TlsCheckResult {
+                mode: "TLS-skip-verify",
+                success: true,
+                version: ver,
+                elapsed_ms: elapsed.as_millis(),
+            });
+        }
+        Err(e) => {
+            let chain = format_error_chain(e.as_ref());
+            eprintln!("  ✗ TLS(skip-verify)  — FAILED: {}", chain);
+            results.push(TlsCheckResult {
+                mode: "TLS-skip-verify",
+                success: false,
+                version: None,
+                elapsed_ms: 0,
+            });
+        }
+    }
+
+    // Pass 3: TLS with verify
+    eprintln!("[3/3] Connecting with TLS (verify cert) ...");
+    match try_connect_tls_verify(base_url).await {
+        Ok((mut conn, elapsed)) => {
+            let ver: Option<String> = match conn.query_first("SELECT VERSION()").await {
+                Ok(Some(v)) => Some(v),
+                _ => None,
+            };
+            eprintln!("  ✓ TLS(verify)  — {}ms  {}", elapsed.as_millis(), ver.as_deref().unwrap_or("(unknown)"));
+            results.push(TlsCheckResult {
+                mode: "TLS-verify",
+                success: true,
+                version: ver,
+                elapsed_ms: elapsed.as_millis(),
+            });
+        }
+        Err(e) => {
+            let chain = format_error_chain(e.as_ref());
+            eprintln!("  ✗ TLS(verify)  — FAILED: {}", chain);
+            results.push(TlsCheckResult {
+                mode: "TLS-verify",
+                success: false,
+                version: None,
+                elapsed_ms: 0,
+            });
+        }
+    }
 
     eprintln!();
-    eprintln!("  Database Version:");
-    eprintln!("    {}", version);
-    eprintln!();
+
+    // Summary
+    let any_success = results.iter().any(|r| r.success);
+    if any_success {
+        let working = results.iter().find(|r| r.success).unwrap();
+        eprintln!("  ✓ Connection successful (mode: {})", working.mode);
+        if let Some(ref ver) = working.version {
+            eprintln!("  Database Version: {}", ver);
+        }
+        eprintln!();
+        if working.mode != "NoTls" {
+            eprintln!("  Recommendation: use ssl-mode in your config URL.");
+            eprintln!("    Example: ?ssl-mode=REQUIRED");
+        }
+    } else {
+        eprintln!("  ✗ All connection methods failed.");
+        eprintln!();
+        eprintln!("  Possible causes:");
+        eprintln!("  - Database server is not running or not reachable");
+        eprintln!("  - Firewall blocking port");
+        eprintln!("  - Wrong host, port, user, or password");
+        std::process::exit(1);
+    }
 }
 
 async fn handle_check_connection_cmd(
@@ -595,6 +738,7 @@ async fn main() {
             connection_max_lifetime,
             interactive,
             no_history,
+            timeout_action,
         }) => {
             if check_connection {
                 let config_path = cli.config.map(PathBuf::from);
@@ -610,6 +754,7 @@ async fn main() {
                     statement_timeout,
                     connection_max_lifetime,
                     no_history,
+                    timeout_action,
                 };
                 if let Err(e) = interactive::run_interactive(args).await {
                     eprintln!("error: {}", e);
@@ -626,6 +771,7 @@ async fn main() {
                     statement_timeout,
                     connection_max_lifetime,
                     no_history,
+                    timeout_action,
                 };
                 if let Err(e) = cli::run_cli(args).await {
                     eprintln!("error: {}", e);

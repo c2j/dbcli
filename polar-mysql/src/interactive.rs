@@ -10,6 +10,8 @@ use rustyline::history::DefaultHistory;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
 
+use tracing::{info, warn};
+
 use crate::cli::{
     CliArgs, OutputFormat, QueryResult, execute_query, render_result,
 };
@@ -406,17 +408,20 @@ async fn connect(
         .map_err(|e| format!("Connection failed: {}", format_error_chain(e.as_ref())))?;
 
     if let (Some(path), Some(plaintext)) = (&target.config_path, &target.plaintext_password) {
+        info!("migrating plaintext password to OS keychain for '{}'", target.keyring_username);
         match store_keyring_password(&target.keyring_username, plaintext) {
             Ok(()) => {
                 if let Err(e) = rewrite_password_to_sentinel(path, &target.name) {
-                    eprintln!(
-                        "warning: password stored in keychain but failed to update config: {}",
+                    warn!(
+                        "password stored in keychain but failed to update config: {}",
                         e
                     );
+                } else {
+                    info!("password migrated to OS keychain for '{}'", target.keyring_username);
                 }
             }
             Err(e) => {
-                eprintln!("warning: failed to migrate password to keychain: {}", e);
+                warn!("failed to migrate password to keychain: {}", e);
             }
         }
     }
@@ -581,6 +586,20 @@ pub(crate) async fn run_interactive(args: CliArgs) -> Result<(), String> {
                 }
                 Err(e) => {
                     eprintln!("error: {}", e);
+                    // Apply timeout_action on query error
+                    if args.timeout_action.as_deref() == Some("disconnect") {
+                        eprintln!("timeout_action=disconnect: reconnecting...");
+                        crate::connection::apply_timeout_action(&mut conn, args.timeout_action.as_deref()).await;
+                        match connect(&target, &effective_timeout).await {
+                            Ok((new_pool, new_conn)) => {
+                                pool = new_pool;
+                                conn = new_conn;
+                            }
+                            Err(reconnect_err) => {
+                                eprintln!("warning: reconnect failed: {}", reconnect_err);
+                            }
+                        }
+                    }
                 }
             }
         }
