@@ -26,9 +26,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
-      - run: cargo build --release -p polar-mysql
-      - run: strip target/release/${{ env.BINARY_NAME }}
+      - name: Install cross
+        run: cargo install cross --locked
+      - name: Build
+        run: cross build --release --target x86_64-unknown-linux-gnu -p polar-mysql
+      - run: strip target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
       - name: Set version
         id: version
         run: |
@@ -41,7 +43,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           ARTIFACT_NAME="${{ env.BINARY_NAME }}-${VERSION}-x86_64-unknown-linux-gnu"
           mkdir -p "${ARTIFACT_NAME}"
-          cp "target/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
+          cp "target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
           zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
       - uses: actions/upload-artifact@v4
         with:
@@ -50,13 +52,15 @@ jobs:
 
   build-linux-arm64:
     name: Build linux-arm64
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
-      - run: cargo build --release -p polar-mysql
-      - run: strip target/release/${{ env.BINARY_NAME }}
+      - name: Install cross
+        run: cargo install cross --locked
+      - name: Build
+        run: cross build --release --target aarch64-unknown-linux-gnu -p polar-mysql
+      - run: strip target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
       - name: Set version
         id: version
         run: |
@@ -69,7 +73,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           ARTIFACT_NAME="${{ env.BINARY_NAME }}-${VERSION}-aarch64-unknown-linux-gnu"
           mkdir -p "${ARTIFACT_NAME}"
-          cp "target/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
+          cp "target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
           zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
       - uses: actions/upload-artifact@v4
         with:
