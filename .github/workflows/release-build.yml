@@ -59,8 +59,13 @@ jobs:
       - name: Setup arm64 deps
         run: |
           sudo dpkg --add-architecture arm64
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main" | sudo tee /etc/apt/sources.list.d/arm64.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          sudo sed -i 's/^Architectures:.*/Architectures: amd64/' /etc/apt/sources.list.d/ubuntu.sources
+          echo "Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: noble noble-updates noble-security
+          Components: main
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg" | sudo tee /etc/apt/sources.list.d/arm64.sources
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libdbus-1-dev:arm64 binutils-aarch64-linux-gnu
       - name: Install zigbuild
