@@ -723,7 +723,7 @@ impl MysqlMcp {
 
 #[tool_handler(
     name = "polar-mysql",
-    version = "0.1.6",
+    version = "0.1.7",
     instructions = "MCP server for MySQL/PolarDB-X database introspection with multi-connection support"
 )]
 impl ServerHandler for MysqlMcp {}
