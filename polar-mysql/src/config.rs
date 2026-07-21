@@ -647,8 +647,8 @@ pub(crate) fn rewrite_password_to_sentinel(
     }
 
     if modified {
-        let new_content = toml::to_string(&value)
-            .map_err(|e| format!("failed to serialize config: {}", e))?;
+        let new_content =
+            toml::to_string(&value).map_err(|e| format!("failed to serialize config: {}", e))?;
         std::fs::write(config_path, new_content)
             .map_err(|e| format!("failed to write config: {}", e))?;
         Ok(())
@@ -767,14 +767,19 @@ mod tests {
 
     fn write_temp_config(name: &str, content: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("polar-mysql-test-{}-{}.toml", std::process::id(), name));
+        let path = dir.join(format!(
+            "polar-mysql-test-{}-{}.toml",
+            std::process::id(),
+            name
+        ));
         std::fs::write(&path, content).unwrap();
         path
     }
 
     #[test]
     fn test_rewrite_sentinel_single_connection_roundtrip() {
-        let path = write_temp_config("single",
+        let path = write_temp_config(
+            "single",
             r#"
 host = "127.0.0.1"
 port = 3306
@@ -787,7 +792,9 @@ database = "mysql"
         rewrite_password_to_sentinel(&path, "default").unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
-        let parsed: toml::Value = content.parse().expect("rewritten config should be valid TOML");
+        let parsed: toml::Value = content
+            .parse()
+            .expect("rewritten config should be valid TOML");
 
         let password = parsed
             .get("password")
@@ -795,7 +802,10 @@ database = "mysql"
             .expect("password field should exist after rewrite");
         assert_eq!(password, "keyring");
 
-        assert_eq!(parsed.get("host").and_then(|v| v.as_str()), Some("127.0.0.1"));
+        assert_eq!(
+            parsed.get("host").and_then(|v| v.as_str()),
+            Some("127.0.0.1")
+        );
         assert_eq!(parsed.get("port").and_then(|v| v.as_integer()), Some(3306));
 
         let _ = std::fs::remove_file(&path);
@@ -803,7 +813,8 @@ database = "mysql"
 
     #[test]
     fn test_rewrite_sentinel_multi_connection_roundtrip() {
-        let path = write_temp_config("multi",
+        let path = write_temp_config(
+            "multi",
             r#"
 default_connection = "dev"
 
@@ -860,7 +871,8 @@ database = "mydb"
 
     #[test]
     fn test_rewrite_sentinel_nonexistent_connection() {
-        let path = write_temp_config("nonexistent",
+        let path = write_temp_config(
+            "nonexistent",
             r#"
 host = "127.0.0.1"
 port = 3306

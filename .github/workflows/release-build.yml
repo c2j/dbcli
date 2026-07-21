@@ -88,24 +88,6 @@ jobs:
         with:
           name: polar-mysql-linux-arm64
           path: "*.zip"
-      - name: Set version
-        id: version
-        run: |
-          VERSION="${GITHUB_REF_NAME#polar-mysql-v}"
-          VERSION="${VERSION#v}"
-          [ -n "${{ inputs.version }}" ] && VERSION="${{ inputs.version }}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Package
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          ARTIFACT_NAME="${{ env.BINARY_NAME }}-${VERSION}-aarch64-unknown-linux-gnu"
-          mkdir -p "${ARTIFACT_NAME}"
-          cp "target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
-          zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: polar-mysql-linux-arm64
-          path: "*.zip"
 
   build-windows:
     name: Build windows-x86_64
