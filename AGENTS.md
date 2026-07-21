@@ -55,7 +55,7 @@ dbcli/                          # Cargo workspace root
 
 | Crate | Purpose |
 |-------|---------|
-| `mysql_async` 0.37 | Async MySQL driver (native-tls) |
+| `mysql_async` 0.37 | Async MySQL driver (rustls-tls, ring crypto) |
 | `rmcp` 1.5 | MCP server framework (stdio transport) |
 | `clap` 4 | CLI argument parsing |
 | `keyring` 3 | OS keychain for password storage |

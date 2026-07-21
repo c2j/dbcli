@@ -14,7 +14,7 @@ default = []
 integration = []
 
 [dependencies]
-mysql_async = { version = "0.37", features = ["native-tls-tls"] }
+mysql_async = { version = "0.37", default-features = false, features = ["default-rustls-ring"] }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 rmcp = { version = "1.5.0", features = ["server", "macros", "transport-io"] }
