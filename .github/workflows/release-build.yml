@@ -98,62 +98,6 @@ jobs:
           name: polar-mysql-linux-arm64
           path: "*.zip"
 
-  build-macos-x86_64:
-    name: Build macos-x86_64
-    runs-on: macos-13
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin
-      - run: cargo build --release -p polar-mysql --target x86_64-apple-darwin
-      - run: strip target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
-      - name: Set version
-        id: version
-        run: |
-          VERSION="${GITHUB_REF_NAME#polar-mysql-v}"
-          VERSION="${VERSION#v}"
-          [ -n "${{ inputs.version }}" ] && VERSION="${{ inputs.version }}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Package
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          ARTIFACT_NAME="${{ env.BINARY_NAME }}-${VERSION}-x86_64-apple-darwin"
-          mkdir -p "${ARTIFACT_NAME}"
-          cp "target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
-          zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: polar-mysql-macos-x86_64
-          path: "*.zip"
-
-  build-macos-arm64:
-    name: Build macos-arm64
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release -p polar-mysql
-      - run: strip target/release/${{ env.BINARY_NAME }}
-      - name: Set version
-        id: version
-        run: |
-          VERSION="${GITHUB_REF_NAME#polar-mysql-v}"
-          VERSION="${VERSION#v}"
-          [ -n "${{ inputs.version }}" ] && VERSION="${{ inputs.version }}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Package
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          ARTIFACT_NAME="${{ env.BINARY_NAME }}-${VERSION}-aarch64-apple-darwin"
-          mkdir -p "${ARTIFACT_NAME}"
-          cp "target/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
-          zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: polar-mysql-macos-arm64
-          path: "*.zip"
-
   build-windows-x86_64:
     name: Build windows-x86_64
     runs-on: windows-latest
@@ -188,7 +132,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build-linux-x86_64, build-linux-arm64, build-macos-x86_64, build-macos-arm64, build-windows-x86_64]
+    needs: [build-linux-x86_64, build-linux-arm64, build-windows-x86_64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
