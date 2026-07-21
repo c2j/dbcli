@@ -1,6 +1,8 @@
 [build]
-# No system dependencies needed — polar-mysql uses pure Rust MySQL driver
-pre-build = []
+pre-build = [
+    "apt-get update",
+    "apt-get install -y --no-install-recommends libdbus-1-dev pkg-config",
+]
 
 [target.x86_64-unknown-linux-gnu]
 image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main"
