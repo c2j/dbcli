@@ -56,12 +56,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install cross
-        run: cargo install cross --locked
-      - name: Build
-        run: cross build --release --target aarch64-unknown-linux-gnu -p polar-mysql
-      - name: Install cross strip
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends binutils-aarch64-linux-gnu
+      - name: Install zigbuild and arm64 deps
+        run: |
+          cargo install cargo-zigbuild --locked
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev:arm64 pkg-config binutils-aarch64-linux-gnu
+      - name: Build (glibc 2.31)
+        run: cargo zigbuild --release --target aarch64-unknown-linux-gnu.2.31 -p polar-mysql
+        env:
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_PATH: "/usr/lib/aarch64-linux-gnu/pkgconfig"
       - run: aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
       - name: Set version
         id: version
