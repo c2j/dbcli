@@ -52,13 +52,17 @@ jobs:
 
   build-linux-arm64:
     name: Build linux-arm64
-    runs-on: ubuntu-22.04-arm
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
-      - run: cargo build --release -p polar-mysql
-      - run: strip target/release/${{ env.BINARY_NAME }}
+      - name: Install cross
+        run: cargo install cross --locked
+      - name: Build (cross + glibc 2.31 sysroot)
+        run: cross build --release --target aarch64-unknown-linux-gnu -p polar-mysql
+      - name: Install cross strip
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends binutils-aarch64-linux-gnu
+      - run: aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
       - name: Set version
         id: version
         run: |
@@ -71,7 +75,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           ARTIFACT_NAME="${{ env.BINARY_NAME }}-${VERSION}-aarch64-unknown-linux-gnu"
           mkdir -p "${ARTIFACT_NAME}"
-          cp "target/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
+          cp "target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
           zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
       - uses: actions/upload-artifact@v4
         with:
