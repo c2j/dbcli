@@ -24,29 +24,15 @@ jobs:
     name: Build linux-x86_64 (glibc >= 2.17)
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@v1
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mlugg/setup-zig@v1
         with:
           version: "0.13.0"
-
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild
-
-      - name: Install system deps
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
-
-      - name: Build
-        run: cargo zigbuild --release -p polar-mysql --target x86_64-unknown-linux-gnu.2.17
-
-      - name: Strip
-        run: strip --strip-unneeded target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
-
+      - run: cargo install cargo-zigbuild
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - run: cargo zigbuild --release -p polar-mysql --target x86_64-unknown-linux-gnu.2.17
+      - run: strip --strip-unneeded target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
       - name: Set version
         id: version
         run: |
@@ -54,18 +40,14 @@ jobs:
           VERSION="${VERSION#v}"
           [ -n "${{ inputs.version }}" ] && VERSION="${{ inputs.version }}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Package
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           ARTIFACT_NAME="${{ env.BINARY_NAME }}-${VERSION}-x86_64-unknown-linux-gnu"
           mkdir -p "${ARTIFACT_NAME}"
           cp "target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
-          cp README.md "${ARTIFACT_NAME}/" 2>/dev/null || true
           zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: polar-mysql-linux-x86_64
           path: "*.zip"
@@ -74,38 +56,29 @@ jobs:
     name: Build linux-arm64 (glibc >= 2.17)
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-unknown-linux-gnu
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@v1
+      - uses: mlugg/setup-zig@v1
         with:
           version: "0.13.0"
-
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild
-
-      - name: Install system deps
+      - run: cargo install cargo-zigbuild
+      - name: Install cross deps
         run: |
           sudo dpkg --add-architecture arm64
+          sudo sed -i '/^deb /s/^deb /deb [arch=amd64,i386] /' /etc/apt/sources.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs) main restricted universe" | sudo tee /etc/apt/sources.list.d/arm64.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs)-updates main restricted universe" | sudo tee -a /etc/apt/sources.list.d/arm64.list
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev:arm64 pkg-config
-
       - name: Build
         env:
           PKG_CONFIG_ALLOW_CROSS: 1
         run: cargo zigbuild --release -p polar-mysql --target aarch64-unknown-linux-gnu.2.17
-
-      - name: Strip
-        run: |
+      - run: |
           sudo apt-get install -y binutils-aarch64-linux-gnu
           aarch64-linux-gnu-strip --strip-unneeded target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
-
       - name: Set version
         id: version
         run: |
@@ -113,18 +86,14 @@ jobs:
           VERSION="${VERSION#v}"
           [ -n "${{ inputs.version }}" ] && VERSION="${{ inputs.version }}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Package
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           ARTIFACT_NAME="${{ env.BINARY_NAME }}-${VERSION}-aarch64-unknown-linux-gnu"
           mkdir -p "${ARTIFACT_NAME}"
           cp "target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
-          cp README.md "${ARTIFACT_NAME}/" 2>/dev/null || true
           zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: polar-mysql-linux-arm64
           path: "*.zip"
@@ -133,20 +102,12 @@ jobs:
     name: Build macos-x86_64
     runs-on: macos-13
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin
-
-      - name: Build
-        run: cargo build --release -p polar-mysql --target x86_64-apple-darwin
-
-      - name: Strip
-        run: strip --strip-unneeded target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
-
+      - run: cargo build --release -p polar-mysql --target x86_64-apple-darwin
+      - run: strip target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}
       - name: Set version
         id: version
         run: |
@@ -154,18 +115,14 @@ jobs:
           VERSION="${VERSION#v}"
           [ -n "${{ inputs.version }}" ] && VERSION="${{ inputs.version }}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Package
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           ARTIFACT_NAME="${{ env.BINARY_NAME }}-${VERSION}-x86_64-apple-darwin"
           mkdir -p "${ARTIFACT_NAME}"
           cp "target/x86_64-apple-darwin/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
-          cp README.md "${ARTIFACT_NAME}/" 2>/dev/null || true
           zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: polar-mysql-macos-x86_64
           path: "*.zip"
@@ -174,18 +131,10 @@ jobs:
     name: Build macos-arm64
     runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build
-        run: cargo build --release -p polar-mysql
-
-      - name: Strip
-        run: strip --strip-unneeded target/release/${{ env.BINARY_NAME }}
-
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p polar-mysql
+      - run: strip target/release/${{ env.BINARY_NAME }}
       - name: Set version
         id: version
         run: |
@@ -193,18 +142,14 @@ jobs:
           VERSION="${VERSION#v}"
           [ -n "${{ inputs.version }}" ] && VERSION="${{ inputs.version }}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Package
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           ARTIFACT_NAME="${{ env.BINARY_NAME }}-${VERSION}-aarch64-apple-darwin"
           mkdir -p "${ARTIFACT_NAME}"
           cp "target/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
-          cp README.md "${ARTIFACT_NAME}/" 2>/dev/null || true
           zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: polar-mysql-macos-arm64
           path: "*.zip"
@@ -213,19 +158,13 @@ jobs:
     name: Build windows-x86_64
     runs-on: windows-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-
-      - name: Build
-        run: cargo build --release -p polar-mysql --target x86_64-pc-windows-msvc
+      - run: cargo build --release -p polar-mysql --target x86_64-pc-windows-msvc
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
-
       - name: Set version
         id: version
         shell: bash
@@ -234,7 +173,6 @@ jobs:
           VERSION="${VERSION#v}"
           [ -n "${{ inputs.version }}" ] && VERSION="${{ inputs.version }}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Package
         shell: pwsh
         run: |
@@ -242,11 +180,8 @@ jobs:
           $ARTIFACT_NAME = "${{ env.BINARY_NAME }}-${VERSION}-x86_64-pc-windows-msvc"
           New-Item -ItemType Directory -Force -Path $ARTIFACT_NAME
           Copy-Item "target/x86_64-pc-windows-msvc/release/${{ env.BINARY_NAME }}.exe" -Destination $ARTIFACT_NAME
-          if (Test-Path README.md) { Copy-Item README.md -Destination $ARTIFACT_NAME }
           Compress-Archive -Path $ARTIFACT_NAME -DestinationPath "${ARTIFACT_NAME}.zip"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: polar-mysql-windows-x86_64
           path: "*.zip"
@@ -256,15 +191,11 @@ jobs:
     needs: [build-linux-x86_64, build-linux-arm64, build-macos-x86_64, build-macos-arm64, build-windows-x86_64]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
-
       - name: Generate SHA256 checksums
         run: |
           cd artifacts
@@ -273,7 +204,6 @@ jobs:
           if [ ${#FILES[@]} -gt 0 ]; then
             sha256sum "${FILES[@]}" > ../SHA256SUMS.txt
           fi
-
       - name: Determine tag
         id: tag
         run: |
@@ -283,7 +213,6 @@ jobs:
             TAG="${GITHUB_REF#refs/tags/}"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
