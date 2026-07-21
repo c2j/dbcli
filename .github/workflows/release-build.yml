@@ -20,19 +20,15 @@ env:
   BINARY_NAME: polar-mysql
 
 jobs:
-  build-linux-x86_64:
-    name: Build linux-x86_64 (glibc >= 2.17)
-    runs-on: ubuntu-22.04
+  build-linux:
+    name: Build linux-x86_64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: mlugg/setup-zig@v1
-        with:
-          version: "0.13.0"
-      - run: cargo install cargo-zigbuild
       - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libssl-dev pkg-config
-      - run: cargo zigbuild --release -p polar-mysql --target x86_64-unknown-linux-gnu.2.17
-      - run: strip --strip-unneeded target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
+      - run: cargo build --release -p polar-mysql
+      - run: strip target/release/${{ env.BINARY_NAME }}
       - name: Set version
         id: version
         run: |
@@ -45,60 +41,14 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           ARTIFACT_NAME="${{ env.BINARY_NAME }}-${VERSION}-x86_64-unknown-linux-gnu"
           mkdir -p "${ARTIFACT_NAME}"
-          cp "target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
+          cp "target/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
           zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
       - uses: actions/upload-artifact@v4
         with:
           name: polar-mysql-linux-x86_64
           path: "*.zip"
 
-  build-linux-arm64:
-    name: Build linux-arm64 (glibc >= 2.17)
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
-      - uses: mlugg/setup-zig@v1
-        with:
-          version: "0.13.0"
-      - run: cargo install cargo-zigbuild
-      - name: Install cross deps
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo sed -i '/^deb /s/^deb /deb [arch=amd64,i386] /' /etc/apt/sources.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs) main restricted universe" | sudo tee /etc/apt/sources.list.d/arm64.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs)-updates main restricted universe" | sudo tee -a /etc/apt/sources.list.d/arm64.list
-          sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev:arm64 libssl-dev:arm64 pkg-config
-      - name: Build
-        env:
-          PKG_CONFIG_ALLOW_CROSS: 1
-        run: cargo zigbuild --release -p polar-mysql --target aarch64-unknown-linux-gnu.2.17
-      - run: |
-          sudo apt-get install -y binutils-aarch64-linux-gnu
-          aarch64-linux-gnu-strip --strip-unneeded target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
-      - name: Set version
-        id: version
-        run: |
-          VERSION="${GITHUB_REF_NAME#polar-mysql-v}"
-          VERSION="${VERSION#v}"
-          [ -n "${{ inputs.version }}" ] && VERSION="${{ inputs.version }}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Package
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          ARTIFACT_NAME="${{ env.BINARY_NAME }}-${VERSION}-aarch64-unknown-linux-gnu"
-          mkdir -p "${ARTIFACT_NAME}"
-          cp "target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}" "${ARTIFACT_NAME}/"
-          zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: polar-mysql-linux-arm64
-          path: "*.zip"
-
-  build-windows-x86_64:
+  build-windows:
     name: Build windows-x86_64
     runs-on: windows-latest
     steps:
@@ -132,7 +82,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build-linux-x86_64, build-linux-arm64, build-windows-x86_64]
+    needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
