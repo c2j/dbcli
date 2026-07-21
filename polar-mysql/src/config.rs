@@ -630,37 +630,25 @@ pub(crate) fn rewrite_password_to_sentinel(
         .parse()
         .map_err(|e| format!("failed to parse config: {}", e))?;
 
-    let modified = if connection_name == "default" || connection_name.is_empty() {
-        if let Some(obj) = value.as_table_mut() {
-            if let Some(password) = obj.get_mut("password") {
+    let mut modified = false;
+
+    if connection_name == "default" || connection_name.is_empty() {
+        if let Some(password) = value.get_mut("password") {
+            *password = toml::Value::String(KEYRING_SENTINEL.to_string());
+            modified = true;
+        }
+    } else if let Some(connections) = value.get_mut("connections") {
+        if let Some(conn) = connections.get_mut(connection_name) {
+            if let Some(password) = conn.get_mut("password") {
                 *password = toml::Value::String(KEYRING_SENTINEL.to_string());
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    } else {
-        if let Some(obj) = value.as_table_mut() {
-            if let Some(connections) = obj.get_mut("connections") {
-                if let Some(conns) = connections.as_table_mut() {
-                    if let Some(conn) = conns.get_mut(connection_name) {
-                        if let Some(conn_table) = conn.as_table_mut() {
-                            if let Some(password) = conn_table.get_mut("password") {
-                                *password = toml::Value::String(KEYRING_SENTINEL.to_string());
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
+                modified = true;
             }
         }
-        false
-    };
+    }
 
     if modified {
-        let new_content = value.to_string();
+        let new_content = toml::to_string(&value)
+            .map_err(|e| format!("failed to serialize config: {}", e))?;
         std::fs::write(config_path, new_content)
             .map_err(|e| format!("failed to write config: {}", e))?;
         Ok(())
@@ -773,5 +761,121 @@ mod tests {
             connection_max_lifetime: None,
         };
         assert_eq!(conn.keyring_username(), "root/dev");
+    }
+
+    // ─── rewrite_password_to_sentinel regression tests ─────────────────
+
+    fn write_temp_config(name: &str, content: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("polar-mysql-test-{}-{}.toml", std::process::id(), name));
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_rewrite_sentinel_single_connection_roundtrip() {
+        let path = write_temp_config("single",
+            r#"
+host = "127.0.0.1"
+port = 3306
+user = "root"
+password = "hunter2"
+database = "mysql"
+"#,
+        );
+
+        rewrite_password_to_sentinel(&path, "default").unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let parsed: toml::Value = content.parse().expect("rewritten config should be valid TOML");
+
+        let password = parsed
+            .get("password")
+            .and_then(|v| v.as_str())
+            .expect("password field should exist after rewrite");
+        assert_eq!(password, "keyring");
+
+        assert_eq!(parsed.get("host").and_then(|v| v.as_str()), Some("127.0.0.1"));
+        assert_eq!(parsed.get("port").and_then(|v| v.as_integer()), Some(3306));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_rewrite_sentinel_multi_connection_roundtrip() {
+        let path = write_temp_config("multi",
+            r#"
+default_connection = "dev"
+
+[connections.dev]
+name = "dev"
+host = "127.0.0.1"
+port = 3306
+user = "root"
+password = "secret123"
+database = "mydb"
+
+[connections.prod]
+name = "prod"
+host = "prod.example.com"
+port = 3306
+user = "readonly"
+password = "prod-secret"
+database = "mydb"
+"#,
+        );
+
+        rewrite_password_to_sentinel(&path, "dev").unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let parsed: toml::Value = content
+            .parse()
+            .expect("rewritten multi-connection config should be valid TOML");
+
+        let dev_password = parsed
+            .get("connections")
+            .and_then(|v| v.get("dev"))
+            .and_then(|v| v.get("password"))
+            .and_then(|v| v.as_str())
+            .expect("dev password should exist");
+        assert_eq!(dev_password, "keyring");
+
+        let prod_password = parsed
+            .get("connections")
+            .and_then(|v| v.get("prod"))
+            .and_then(|v| v.get("password"))
+            .and_then(|v| v.as_str())
+            .expect("prod password should still exist");
+        assert_eq!(prod_password, "prod-secret");
+
+        let dev_host = parsed
+            .get("connections")
+            .and_then(|v| v.get("dev"))
+            .and_then(|v| v.get("host"))
+            .and_then(|v| v.as_str());
+        assert_eq!(dev_host, Some("127.0.0.1"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_rewrite_sentinel_nonexistent_connection() {
+        let path = write_temp_config("nonexistent",
+            r#"
+host = "127.0.0.1"
+port = 3306
+user = "root"
+password = "hunter2"
+database = "mysql"
+"#,
+        );
+
+        let result = rewrite_password_to_sentinel(&path, "nonexistent");
+        assert!(result.is_err(), "should error for nonexistent connection");
+        assert!(result
+            .unwrap_err()
+            .contains("could not find password field"));
+
+        let _ = std::fs::remove_file(&path);
     }
 }
