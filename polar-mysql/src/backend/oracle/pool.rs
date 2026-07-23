@@ -148,9 +148,9 @@ mod integration {
 
         let pool = create_oracle_pool(&url, None).expect("should create pool");
         let mut conn = pool.acquire().await.expect("should acquire connection");
-        let sql = conn.dialect().add_limit("SELECT * FROM all_tables WHERE ROWNUM <= 50", 5);
+        let sql = conn.dialect().add_limit("SELECT * FROM all_tables", 5);
 
         let result = conn.query(&sql).await.expect("should query with limit");
-        assert!(result.row_count <= 5, "should respect FETCH FIRST limit");
+        assert!(result.row_count <= 5);
     }
 }

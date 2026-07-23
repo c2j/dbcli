@@ -8,8 +8,8 @@ impl Dialect for OracleDialect {
          (SELECT banner FROM v$version WHERE banner LIKE 'Oracle%' AND ROWNUM = 1) AS version, \
          SYS_CONTEXT('USERENV','CURRENT_SCHEMA') AS database, \
          SYS_CONTEXT('USERENV','SESSION_USER') AS current_user, \
-         SYS_CONTEXT('USERENV','SERVER_HOST') AS hostname, \
-         CAST(SYS_CONTEXT('USERENV','SERVER_PORT') AS NUMBER) AS port, \
+         SYS_CONTEXT('USERENV','HOST') AS hostname, \
+         NULL AS port, \
          (SELECT platform_name FROM v$database) AS os, \
          (SELECT value FROM nls_database_parameters WHERE parameter = 'NLS_CHARACTERSET') AS charset, \
          (SELECT value FROM nls_database_parameters WHERE parameter = 'NLS_SORT') AS collation, \
