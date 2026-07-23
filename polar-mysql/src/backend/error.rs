@@ -1,5 +1,6 @@
 // ─── Unified Database Error Type ────────────────────────────────────
 
+use std::error::Error as StdError;
 use std::fmt;
 
 /// Generic database error that wraps backend-specific errors.
@@ -86,7 +87,22 @@ impl DbError {
 
 impl fmt::Display for DbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)
+        write!(f, "{}", self.message)?;
+        // Walk the source chain to expose the underlying driver error
+        let mut source = self.source();
+        if source.is_some() {
+            write!(f, ": ")?;
+        }
+        let mut first = true;
+        while let Some(e) = source {
+            if !first {
+                write!(f, " | caused by: ")?;
+            }
+            first = false;
+            write!(f, "{}", e)?;
+            source = e.source();
+        }
+        Ok(())
     }
 }
 

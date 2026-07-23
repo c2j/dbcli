@@ -57,16 +57,26 @@ impl BackendRegistry {
             return Err(format!("No backend registered for scheme '{}'", scheme));
         }
 
-        let mut last_err = String::new();
+        let mut errors: Vec<String> = Vec::new();
         for factory in factories {
             match factory.connect(url, timeout).await {
-                Ok(pool) => return Ok(pool),
+                Ok(pool) => {
+                    // Validate by acquiring a real connection, then drop it.
+                    // This ensures the backend actually works — needed for
+                    // Oracle where pool creation (URL parsing) always succeeds.
+                    match pool.acquire().await {
+                        Ok(_conn) => return Ok(pool),
+                        Err(e) => {
+                            errors.push(format!("{} (acquire): {}", factory.name(), e));
+                        }
+                    }
+                }
                 Err(e) => {
-                    last_err = format!("{}: {}", factory.name(), e);
+                    errors.push(format!("{} (connect): {}", factory.name(), e));
                 }
             }
         }
-        Err(last_err)
+        Err(errors.join(" | fallback: "))
     }
 
     pub fn resolve(
