@@ -1,0 +1,19 @@
+# Combined MySQL + Oracle config for multi-backend testing
+# Usage: hepta_dbcli --config tests/docker-all.toml cli --sql "SELECT * FROM dual" --name oracle
+
+default_connection = "mysql"
+
+[connections.mysql]
+host = "127.0.0.1"
+port = 3306
+user = "root"
+password = "testpass"
+database = "testdb"
+
+[connections.oracle]
+driver = "oracle"
+host = "127.0.0.1"
+port = 1521
+user = "system"
+password = "testpass"
+database = "FREEPDB1"

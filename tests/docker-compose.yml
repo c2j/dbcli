@@ -1,0 +1,30 @@
+# Integration test environment — MySQL 8 + Oracle 23 Free
+
+services:
+  mysql:
+    image: mysql:8
+    container_name: hepta-mysql-test
+    environment:
+      MYSQL_ROOT_PASSWORD: testpass
+      MYSQL_DATABASE: testdb
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    container_name: hepta-oracle-test
+    environment:
+      ORACLE_PASSWORD: testpass
+    ports:
+      - "1521:1521"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s

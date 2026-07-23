@@ -1,0 +1,12 @@
+# Oracle Docker connection config
+# Usage: hepta_dbcli --config tests/docker-oracle.toml cli --sql "SELECT * FROM dual"
+
+default_connection = "oracle"
+
+[connections.oracle]
+driver = "oracle"
+host = "127.0.0.1"
+port = 1521
+user = "system"
+password = "testpass"
+database = "FREEPDB1"
