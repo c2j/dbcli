@@ -4,9 +4,10 @@ CLI and MCP server for MySQL/PolarDB-X/Oracle database introspection.
 
 ## Features
 
-- **MCP server** — spawn as a Model Context Protocol server for AI tools (Claude, Cursor, etc.) to query MySQL/PolarDB-X databases with read-only safety enforcement
+- **MCP server** — spawn as a Model Context Protocol server for AI tools (Claude, Cursor, etc.) to query databases with read-only safety enforcement
+- **Multi-database** — supports MySQL, PolarDB-X, and Oracle (single binary with `--features oracle`)
 - **One-shot CLI** — execute SQL from command line, file, or stdin with multiple output formats
-- **Interactive REPL** — MySQL-aware SQL prompt with multi-line editing, history, and dot commands
+- **Interactive REPL** — database-aware SQL prompt with multi-line editing, history, and dot commands
 - **Multi-connection** — manage multiple database connections with per-connection timeout config
 - **OS keychain** — passwords stored in macOS Keychain or Linux Secret Service, with automatic migration from plaintext config files
 
@@ -56,12 +57,24 @@ password = "keyring"
 host = "127.0.0.1"
 user = "root"
 password = "keyring"
+
+# Oracle connection
+[connections.ora]
+driver = "oracle"
+host = "oracle.internal"
+port = 1521
+user = "scott"
+password = "keyring"
+database = "FREEPDB1"
 ```
 
 ### Environment variable
 
 ```bash
 export POLARDB_MYSQL_URL="mysql://user:password@host:port/database"
+
+# Oracle via URL
+export POLARDB_MYSQL_URL="oracle://scott:tiger@host:1521/FREEPDB1"
 ```
 
 ### Timeout settings
@@ -157,18 +170,21 @@ When running as MCP server, the following tools are available:
 | `get_database_info` | Server version, current user, charset, OS |
 | `list_tables` | All user tables/views with engine, row count, size |
 | `get_table_metadata` | Column types, nullability, defaults, indexes |
-| `execute_query` | Read-only SELECT/EXPLAIN/SHOW/DESCRIBE (appends `LIMIT 1000` by default) |
-| `get_execution_plan` | EXPLAIN or EXPLAIN ANALYZE with TEXT/JSON format |
+| `execute_query` | Read-only SELECT/EXPLAIN/SHOW/DESCRIBE (appends `LIMIT N` or `FETCH FIRST N ROWS ONLY`; Oracle allows SELECT/EXPLAIN/WITH) |
+| `get_execution_plan` | EXPLAIN or EXPLAIN ANALYZE with TEXT/JSON format (Oracle: EXPLAIN PLAN + DBMS_XPLAN) |
 | `list_connections` | List all configured connections and their status |
 
 ## Development
 
 ```bash
-# Build
+# Build (MySQL only)
 cargo build
 
-# Release
-cargo build --release -p polar-mysql
+# Build with Oracle support
+cargo build --features oracle
+
+# Release (includes Oracle)
+cargo build --release -p polar-mysql --features oracle
 
 # Format check
 cargo fmt --all -- --check
@@ -181,6 +197,12 @@ cargo test --all
 
 # Integration tests (requires running MySQL instance)
 POLARDB_MYSQL_TEST_URL=mysql://mcp:testpass@127.0.0.1:3306/testdb cargo test --all --features integration
+
+# Oracle unit tests
+cargo test --features oracle
+
+# Oracle integration tests (requires running Oracle)
+POLARDB_ORACLE_TEST_URL=oracle://system:testpass@127.0.0.1:1521/FREEPDB1 cargo test --features "oracle,integration" -- oracle
 ```
 
 CI enforces: `cargo fmt --check` → `cargo clippy` → `cargo test` (in that order).
@@ -203,6 +225,21 @@ docker exec mysql-test mysql -u root -ptestpass -e "
 
 # Run tests
 POLARDB_MYSQL_TEST_URL=mysql://mcp:testpass@127.0.0.1:3306/testdb cargo test --all --features integration
+```
+
+### Running Oracle for integration tests
+
+```bash
+docker run -d --name oracle-test -p 1521:1521 \
+  -e ORACLE_PASSWORD=testpass \
+  gvenzl/oracle-free:23-slim
+
+# Wait for Oracle to be ready (can take ~30s)
+docker logs -f oracle-test
+
+# Run tests
+POLARDB_ORACLE_TEST_URL=oracle://system:testpass@127.0.0.1:1521/FREEPDB1 \
+  cargo test --features "oracle,integration" -- oracle
 ```
 
 ## License
