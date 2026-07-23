@@ -407,12 +407,8 @@ async fn connect(
     registry: &BackendRegistry,
 ) -> Result<Box<dyn DbConn + Send>, String> {
     let scheme = target.connection_url.find("://").map(|i| &target.connection_url[..i]).unwrap_or("mysql");
-    let factory = registry
-        .get_by_scheme(scheme)
-        .ok_or_else(|| format!("No backend registered for scheme '{}'", scheme))?;
-
-    let pool = factory
-        .connect(&target.connection_url, Some(effective_timeout))
+    let pool = registry
+        .connect_with_fallback(scheme, &target.connection_url, Some(effective_timeout))
         .await
         .map_err(|e| format!("Connection failed: {}", e))?;
 

@@ -354,17 +354,9 @@ async fn do_oracle_check(
     eprintln!();
     print_password_status(resolved);
 
-    let factory = match registry.get_by_scheme("oracle") {
-        Some(f) => f,
-        None => {
-            eprintln!("  ✗ Oracle backend not available (build with --features oracle)");
-            return;
-        }
-    };
-
     eprintln!("[1/1] Connecting to Oracle ...");
     let start = Instant::now();
-    match factory.connect(base_url, None).await {
+    match registry.connect_with_fallback("oracle", base_url, None).await {
         Ok(pool) => {
             let elapsed = start.elapsed();
             match pool.acquire().await {
@@ -388,12 +380,12 @@ async fn do_oracle_check(
                     migrate_password_if_needed(resolved);
                 }
                 Err(e) => {
-                    eprintln!("  ✗ Oracle  — FAILED: {}", format_error_chain(&e));
+                    eprintln!("  ✗ Oracle  — FAILED: {}", e);
                 }
             }
         }
         Err(e) => {
-            eprintln!("  ✗ Oracle  — FAILED: {}", format_error_chain(&e));
+            eprintln!("  ✗ Oracle  — FAILED: {}", e);
         }
     }
 }

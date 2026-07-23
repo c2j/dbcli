@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::BackendFactory;
+use super::{BackendFactory, DbPool};
+use crate::backend::error::DbError;
+use crate::config::TimeoutConfig;
 
 #[derive(Default)]
 pub struct BackendRegistry {
@@ -30,8 +32,41 @@ impl BackendRegistry {
             .and_then(|factories| factories.first())
     }
 
+    pub fn get_by_scheme_all(&self, scheme: &str) -> &[Arc<dyn BackendFactory>] {
+        self.by_scheme
+            .get(&scheme.to_lowercase())
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
     pub fn get_by_name(&self, name: &str) -> Option<&Arc<dyn BackendFactory>> {
         self.by_name.get(&name.to_lowercase())
+    }
+
+    /// Try all registered factories for a scheme, returning the first successful connection.
+    /// For Oracle, tries oracle-rs first (12c+, pure Rust), then falls back to
+    /// oracle-native (11g+, needs Instant Client).
+    pub async fn connect_with_fallback(
+        &self,
+        scheme: &str,
+        url: &str,
+        timeout: Option<&TimeoutConfig>,
+    ) -> Result<Arc<dyn DbPool>, String> {
+        let factories = self.get_by_scheme_all(scheme);
+        if factories.is_empty() {
+            return Err(format!("No backend registered for scheme '{}'", scheme));
+        }
+
+        let mut last_err = String::new();
+        for factory in factories {
+            match factory.connect(url, timeout).await {
+                Ok(pool) => return Ok(pool),
+                Err(e) => {
+                    last_err = format!("{}: {}", factory.name(), e);
+                }
+            }
+        }
+        Err(last_err)
     }
 
     pub fn resolve(

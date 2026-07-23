@@ -317,21 +317,12 @@ impl DbMcp {
         name: &str,
         url: &str,
     ) -> Result<(Arc<dyn DbPool>, Box<dyn DbConn + Send>), McpError> {
-        let factory =
-            self.resolve_factory(url).ok_or_else(|| {
-                McpError::internal_error(
-                    format!(
-                        "No backend factory found for URL scheme in '{}'",
-                        redact_url(url)
-                    ),
-                    None,
-                )
-            })?;
-
-        let pool = factory.connect(url, None).await.map_err(|e| {
-            let chain = format_error_chain(&e);
-            connection_error(url, &chain)
-        })?;
+        let scheme = url.find("://").map(|i| &url[..i]).unwrap_or("mysql");
+        let pool = self
+            .registry
+            .connect_with_fallback(scheme, url, None)
+            .await
+            .map_err(|e| connection_error(url, &e))?;
 
         let conn = pool.acquire().await.map_err(|e| {
             let chain = format_error_chain(&e);
