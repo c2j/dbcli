@@ -750,7 +750,7 @@ fn create_registry() -> BackendRegistry {
     registry.register(Arc::new(MySqlFactory));
     #[cfg(feature = "oracle-rs")]
     registry.register(Arc::new(crate::backend::oracle::OracleFactory));
-    #[cfg(all(feature = "oracle", not(feature = "oracle-rs")))]
+    #[cfg(feature = "oracle")]
     registry.register(Arc::new(crate::backend::oracle_native::OracleFactory));
     registry
 }
