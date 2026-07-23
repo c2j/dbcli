@@ -748,8 +748,10 @@ async fn parent_death_watchdog(_interval: std::time::Duration) {
 fn create_registry() -> BackendRegistry {
     let mut registry = BackendRegistry::new();
     registry.register(Arc::new(MySqlFactory));
-    #[cfg(feature = "oracle")]
+    #[cfg(feature = "oracle-rs")]
     registry.register(Arc::new(crate::backend::oracle::OracleFactory));
+    #[cfg(all(feature = "oracle", not(feature = "oracle-rs")))]
+    registry.register(Arc::new(crate::backend::oracle_native::OracleFactory));
     registry
 }
 

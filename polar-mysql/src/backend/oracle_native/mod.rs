@@ -11,6 +11,7 @@ use crate::backend::error::DbError;
 use crate::config::TimeoutConfig;
 
 use self::dialect::OracleDialect;
+use self::pool::create_oracle_pool;
 
 pub(crate) struct OracleFactory;
 
@@ -37,6 +38,6 @@ impl BackendFactory for OracleFactory {
             .and_then(|tc| tc.statement_timeout)
             .map(|d| d.as_millis() as u64);
 
-        pool::create_oracle_pool(url, timeout_ms)
+        create_oracle_pool(url, timeout_ms)
     }
 }

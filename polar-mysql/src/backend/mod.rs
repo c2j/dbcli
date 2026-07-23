@@ -8,8 +8,10 @@
 pub mod error;
 pub mod factory;
 pub(crate) mod mysql;
-#[cfg(feature = "oracle")]
+#[cfg(feature = "oracle-rs")]
 pub(crate) mod oracle;
+#[cfg(feature = "oracle")]
+pub(crate) mod oracle_native;
 
 use async_trait::async_trait;
 use serde_json::Value;

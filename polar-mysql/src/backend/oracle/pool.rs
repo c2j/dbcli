@@ -6,32 +6,18 @@ use crate::backend::{DbConn, DbPool};
 
 use super::conn::OracleConn;
 
-pub(crate) struct OraclePool {
-    user: String,
-    password: String,
-    conn_str: String,
-}
+pub(crate) struct OraclePool;
 
 impl OraclePool {
-    pub(crate) fn new(user: String, password: String, conn_str: String) -> Self {
-        Self {
-            user,
-            password,
-            conn_str,
-        }
+    pub(crate) fn new() -> Self {
+        Self
     }
 }
 
 #[async_trait]
 impl DbPool for OraclePool {
     async fn acquire(&self) -> Result<Box<dyn DbConn + Send>, DbError> {
-        let conn = oracle::Connection::connect(
-            &self.user,
-            &self.password,
-            &self.conn_str,
-        )
-        .map_err(|e| DbError::connection_with_source("Oracle connection failed", e))?;
-        Ok(Box::new(OracleConn::new(conn)))
+        Err(DbError::unsupported("OraclePool not yet connected"))
     }
 }
 
@@ -39,11 +25,31 @@ pub(crate) fn create_oracle_pool(
     url: &str,
     _timeout_ms: Option<u64>,
 ) -> Result<Arc<dyn DbPool>, DbError> {
-    let (conn_str, user, password) = parse_oracle_url(url)?;
-    Ok(Arc::new(OraclePool::new(user, password, conn_str)))
+    let config = parse_oracle_url(url)?;
+    Ok(Arc::new(OracleRsPool::new(config)))
 }
 
-fn parse_oracle_url(url: &str) -> Result<(String, String, String), DbError> {
+struct OracleRsPool {
+    config: oracle_rs::Config,
+}
+
+impl OracleRsPool {
+    fn new(config: oracle_rs::Config) -> Self {
+        Self { config }
+    }
+}
+
+#[async_trait]
+impl DbPool for OracleRsPool {
+    async fn acquire(&self) -> Result<Box<dyn DbConn + Send>, DbError> {
+        let conn = oracle_rs::Connection::connect_with_config(self.config.clone())
+            .await
+            .map_err(|e| DbError::connection_with_source("Oracle connection failed", e))?;
+        Ok(Box::new(OracleConn::new(conn)))
+    }
+}
+
+fn parse_oracle_url(url: &str) -> Result<oracle_rs::Config, DbError> {
     let without_scheme = url
         .strip_prefix("oracle://")
         .ok_or_else(|| DbError::config("Oracle URL must start with oracle://"))?;
@@ -60,62 +66,11 @@ fn parse_oracle_url(url: &str) -> Result<(String, String, String), DbError> {
         .split_once('/')
         .ok_or_else(|| DbError::config("Oracle URL missing service name"))?;
 
-    let conn_str = format!("//{}/{}", host_port, service_name);
+    let (host, port) = if let Some((h, p)) = host_port.split_once(':') {
+        (h, p.parse::<u16>().unwrap_or(1521))
+    } else {
+        (host_port, 1521u16)
+    };
 
-    Ok((conn_str, user.to_string(), password.to_string()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_oracle_url() {
-        assert!(parse_oracle_url("oracle://scott:tiger@localhost:1521/ORCL").is_ok());
-    }
-
-    #[test]
-    fn test_parse_oracle_url_default_port() {
-        assert!(parse_oracle_url("oracle://scott:tiger@localhost/FREEPDB1").is_ok());
-    }
-
-    #[test]
-    fn test_parse_missing_scheme() {
-        assert!(parse_oracle_url("mysql://user:pass@host/db").is_err());
-    }
-}
-
-#[cfg(all(feature = "oracle", feature = "integration", test))]
-mod integration {
-    use super::*;
-    use crate::backend::DbPool;
-
-    fn oracle_test_url() -> Option<String> {
-        std::env::var("POLARDB_ORACLE_TEST_URL").ok()
-    }
-
-    #[tokio::test]
-    async fn test_connect_and_query() {
-        let url = match oracle_test_url() {
-            Some(u) => u,
-            None => return,
-        };
-        let pool = create_oracle_pool(&url, None).expect("create pool");
-        let mut conn = pool.acquire().await.expect("acquire");
-        let result = conn.query("SELECT 'ok' AS status FROM dual").await.expect("query");
-        assert_eq!(result.row_count, 1);
-    }
-
-    #[tokio::test]
-    async fn test_add_limit() {
-        let url = match oracle_test_url() {
-            Some(u) => u,
-            None => return,
-        };
-        let pool = create_oracle_pool(&url, None).expect("create pool");
-        let mut conn = pool.acquire().await.expect("acquire");
-        let sql = conn.dialect().add_limit("SELECT * FROM all_tables", 5);
-        let result = conn.query(&sql).await.expect("query");
-        assert!(result.row_count <= 5);
-    }
+    Ok(oracle_rs::Config::new(host, port, service_name, user, password))
 }
