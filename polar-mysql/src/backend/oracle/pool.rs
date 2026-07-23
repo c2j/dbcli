@@ -72,5 +72,37 @@ fn parse_oracle_url(url: &str) -> Result<oracle_rs::Config, DbError> {
         (host_port, 1521u16)
     };
 
-    Ok(oracle_rs::Config::new(host, port, service_name, user, password))
+    Ok(oracle_rs::Config::new(
+        host,
+        port,
+        service_name,
+        &percent_decode(user),
+        &percent_decode(password),
+    ))
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.bytes();
+    while let Some(b) = chars.next() {
+        if b == b'%' {
+            let hi = chars.next().unwrap_or(b'0');
+            let lo = chars.next().unwrap_or(b'0');
+            if let Ok(decoded) = u8::from_str_radix(
+                &format!("{}{}", hi as char, lo as char),
+                16,
+            ) {
+                result.push(decoded as char);
+            } else {
+                result.push('%');
+                result.push(hi as char);
+                result.push(lo as char);
+            }
+        } else if b == b'+' {
+            result.push(' ');
+        } else {
+            result.push(b as char);
+        }
+    }
+    result
 }
