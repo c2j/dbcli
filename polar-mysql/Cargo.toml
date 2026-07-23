@@ -10,7 +10,7 @@ name = "hepta_dbcli"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["oracle"]
 integration = []
 oracle = ["oracle-rs"]
 
