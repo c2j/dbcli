@@ -12,11 +12,11 @@ path = "src/main.rs"
 [features]
 default = ["oracle"]
 integration = []
-oracle = ["oracle-rs"]
+oracle = ["dep:oracle"]
 
 [dependencies]
 mysql_async = { version = "0.37", default-features = false, features = ["default-rustls"] }
-oracle-rs = { version = "0.1", optional = true }
+oracle = { version = "0.6", optional = true }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 rmcp = { version = "1.5.0", features = ["server", "macros", "transport-io"] }
