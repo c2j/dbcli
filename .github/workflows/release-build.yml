@@ -29,7 +29,7 @@ jobs:
       - name: Install cross
         run: cargo install cross --locked
       - name: Build
-        run: cross build --release --target x86_64-unknown-linux-gnu -p polar-mysql
+        run: cross build --release --target x86_64-unknown-linux-gnu -p polar-mysql --features oracle
       - run: strip target/x86_64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
       - name: Set version
         id: version
@@ -67,7 +67,7 @@ jobs:
               apt-get install -y curl build-essential pkg-config libdbus-1-dev
               curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
               . \$HOME/.cargo/env
-              cargo build --release -p polar-mysql
+              cargo build --release -p polar-mysql --features oracle
               strip target/release/polar-mysql
             "
       - name: Set version
@@ -97,7 +97,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-      - run: cargo build --release -p polar-mysql --target x86_64-pc-windows-msvc
+      - run: cargo build --release -p polar-mysql --target x86_64-pc-windows-msvc --features oracle
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
       - name: Set version
