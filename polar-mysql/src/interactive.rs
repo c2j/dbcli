@@ -12,13 +12,14 @@ use rustyline_derive::{Completer, Helper, Hinter};
 
 use tracing::{info, warn};
 
-use crate::cli::{execute_query, render_result, CliArgs, OutputFormat, QueryResult};
+use crate::backend::factory::BackendRegistry;
+use crate::backend::DbConn;
+use crate::cli::{execute_query, render_result, CliArgs, OutputFormat};
+use crate::cli::QueryResult;
 use crate::config::{
     read_config, resolve_env_var_connection, resolve_single_connection,
     rewrite_password_to_sentinel, store_keyring_password, TimeoutConfig,
 };
-use crate::connection::do_connect;
-use crate::server::format_error_chain;
 
 // ─── SqlTokenizer (MySQL variant: supports backtick quoting, # comments) ───
 
@@ -403,10 +404,22 @@ fn resolve_target(
 async fn connect(
     target: &crate::config::ResolvedConnection,
     effective_timeout: &TimeoutConfig,
-) -> Result<(std::sync::Arc<mysql_async::Pool>, mysql_async::Conn), String> {
-    let (pool, conn) = do_connect(&target.connection_url, Some(effective_timeout))
+    registry: &BackendRegistry,
+) -> Result<Box<dyn DbConn + Send>, String> {
+    let scheme = target.connection_url.find("://").map(|i| &target.connection_url[..i]).unwrap_or("mysql");
+    let factory = registry
+        .get_by_scheme(scheme)
+        .ok_or_else(|| format!("No backend registered for scheme '{}'", scheme))?;
+
+    let pool = factory
+        .connect(&target.connection_url, Some(effective_timeout))
         .await
-        .map_err(|e| format!("Connection failed: {}", format_error_chain(e.as_ref())))?;
+        .map_err(|e| format!("Connection failed: {}", e))?;
+
+    let conn = pool
+        .acquire()
+        .await
+        .map_err(|e| format!("Failed to acquire connection: {}", e))?;
 
     if let (Some(path), Some(plaintext)) = (&target.config_path, &target.plaintext_password) {
         info!(
@@ -433,10 +446,10 @@ async fn connect(
         }
     }
 
-    Ok((pool, conn))
+    Ok(conn)
 }
 
-pub(crate) async fn run_interactive(args: CliArgs) -> Result<(), String> {
+pub(crate) async fn run_interactive(args: CliArgs, registry: &BackendRegistry) -> Result<(), String> {
     let raw = read_config(args.config_path.map(PathBuf::from))?;
 
     let (mut target, effective_timeout) = resolve_target(
@@ -445,7 +458,7 @@ pub(crate) async fn run_interactive(args: CliArgs) -> Result<(), String> {
         args.statement_timeout.as_deref(),
         args.connection_max_lifetime.as_deref(),
     )?;
-    let (mut pool, mut conn) = connect(&target, &effective_timeout).await?;
+    let mut conn = connect(&target, &effective_timeout, registry).await?;
 
     let mut rl = Editor::<SqlHelper, DefaultHistory>::new()
         .map_err(|e| format!("failed to init editor: {}", e))?;
@@ -516,8 +529,8 @@ pub(crate) async fn run_interactive(args: CliArgs) -> Result<(), String> {
                 args.statement_timeout.as_deref(),
                 args.connection_max_lifetime.as_deref(),
             ) {
-                Ok((new_target, new_timeout)) => match connect(&new_target, &new_timeout).await {
-                    Ok((new_pool, new_conn)) => {
+                Ok((new_target, new_timeout)) => match connect(&new_target, &new_timeout, registry).await {
+                    Ok(new_conn) => {
                         // Save history for old connection
                         if target.name != new_target.name {
                             if let Some(p) = &history_path {
@@ -525,7 +538,6 @@ pub(crate) async fn run_interactive(args: CliArgs) -> Result<(), String> {
                             }
                         }
                         target = new_target;
-                        pool = new_pool;
                         conn = new_conn;
                         history_path = if !args.no_history {
                             history_path_for(&target.name)
@@ -568,7 +580,7 @@ pub(crate) async fn run_interactive(args: CliArgs) -> Result<(), String> {
 
         let split = SqlTokenizer::split_statements(&input);
         for stmt in &split.complete {
-            let query_result = execute_query(&mut conn, stmt).await;
+            let query_result = execute_query(&mut *conn, stmt).await;
             match query_result {
                 Ok(query_result) => {
                     last_result = Some(query_result.clone());
@@ -592,14 +604,11 @@ pub(crate) async fn run_interactive(args: CliArgs) -> Result<(), String> {
                     // Apply timeout_action on query error
                     if args.timeout_action.as_deref() == Some("disconnect") {
                         eprintln!("timeout_action=disconnect: reconnecting...");
-                        crate::connection::apply_timeout_action(
-                            &mut conn,
-                            args.timeout_action.as_deref(),
-                        )
-                        .await;
-                        match connect(&target, &effective_timeout).await {
-                            Ok((new_pool, new_conn)) => {
-                                pool = new_pool;
+                        if let Some(kill_sql) = conn.dialect().kill_own_connection_sql() {
+                            let _ = conn.query_drop(&kill_sql).await;
+                        }
+                        match connect(&target, &effective_timeout, registry).await {
+                            Ok(new_conn) => {
                                 conn = new_conn;
                             }
                             Err(reconnect_err) => {
@@ -619,11 +628,6 @@ pub(crate) async fn run_interactive(args: CliArgs) -> Result<(), String> {
     if let Some(p) = &history_path {
         let _ = rl.save_history(p);
     }
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        mysql_async::Pool::clone(&pool).disconnect(),
-    )
-    .await;
     Ok(())
 }
 

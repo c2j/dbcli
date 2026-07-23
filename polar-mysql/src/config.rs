@@ -95,6 +95,7 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
 pub(crate) struct NamedConnection {
     pub name: String,
     pub url: Option<String>,
+    pub driver: Option<String>,
     pub host: Option<String>,
     pub port: Option<u16>,
     pub user: Option<String>,
@@ -202,6 +203,7 @@ pub(crate) fn read_config(config_path: Option<PathBuf>) -> Result<McpRawConfig, 
         let conn = NamedConnection {
             name: "default".to_string(),
             url: Some(url),
+            driver: None,
             host: None,
             port: None,
             user: None,
@@ -267,6 +269,7 @@ pub(crate) fn resolve_named_connections(multi: &MultiConfig) -> Vec<NamedConnect
             .map(|(name, conn)| NamedConnection {
                 name: name.clone(),
                 url: conn.url.clone(),
+                driver: conn.driver.clone(),
                 host: conn.host.clone(),
                 port: conn.port,
                 user: conn.user.clone(),
@@ -292,6 +295,7 @@ pub(crate) fn resolve_named_connections(multi: &MultiConfig) -> Vec<NamedConnect
                 result.push(NamedConnection {
                     name: "default".to_string(),
                     url: None,
+                    driver: None,
                     host: multi.host.clone(),
                     port: multi.port,
                     user: multi.user.clone(),
@@ -310,6 +314,7 @@ pub(crate) fn resolve_named_connections(multi: &MultiConfig) -> Vec<NamedConnect
         vec![NamedConnection {
             name: "default".to_string(),
             url: None,
+            driver: None,
             host: multi.host.clone(),
             port: multi.port,
             user: multi.user.clone(),
@@ -325,6 +330,18 @@ pub(crate) fn resolve_named_connections(multi: &MultiConfig) -> Vec<NamedConnect
 // ─── URL Building ────────────────────────────────────────────────────
 
 fn build_mysql_url(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: Option<&str>,
+    database: Option<&str>,
+    sslmode: Option<&str>,
+) -> String {
+    build_db_url("mysql", host, port, user, password, database, sslmode)
+}
+
+fn build_db_url(
+    scheme: &str,
     host: &str,
     port: u16,
     user: &str,
@@ -349,13 +366,13 @@ fn build_mysql_url(
                 || mode.eq_ignore_ascii_case("1")
                 || mode.eq_ignore_ascii_case("yes") =>
         {
-            "?ssl-mode=REQUIRED"
+            if scheme == "oracle" { "" } else { "?ssl-mode=REQUIRED" }
         }
         _ => "",
     };
     format!(
-        "mysql://{}{}:{}{}{}",
-        auth_part, host, port, db_part, ssl_part
+        "{}://{}{}:{}{}{}",
+        scheme, auth_part, host, port, db_part, ssl_part
     )
 }
 
@@ -413,7 +430,8 @@ pub(crate) fn resolve_single_connection(
             .host
             .as_deref()
             .ok_or_else(|| format!("connection '{}' has no host or url", conn.name))?;
-        let port = conn.port.unwrap_or(3306);
+        let scheme = conn.driver.as_deref().unwrap_or("mysql");
+        let port = conn.port.unwrap_or(if scheme == "oracle" { 1521 } else { 3306 });
         let user = conn
             .user
             .as_deref()
@@ -421,7 +439,7 @@ pub(crate) fn resolve_single_connection(
         let password = conn.password.as_deref();
         let database = conn.database.as_deref();
         let sslmode = conn.sslmode.as_deref();
-        build_mysql_url(host, port, user, password, database, sslmode)
+        build_db_url(scheme, host, port, user, password, database, sslmode)
     };
 
     let password_source = match conn.password.as_deref() {
@@ -442,19 +460,20 @@ pub(crate) fn resolve_single_connection(
         _ => None,
     };
 
+    let driver_scheme = conn.driver.as_deref().unwrap_or("mysql");
+
     // If password source is keyring, resolve it now
     let connection_url = if matches!(password_source, PasswordSource::Keyring) {
         let pw = read_keyring_password(&conn.keyring_username())?;
         if let Some(ref u) = conn.url {
-            // Replace password in URL
             replace_password_in_url(u, &pw)
         } else {
             let host = conn.host.as_deref().unwrap();
-            let port = conn.port.unwrap_or(3306);
+            let port = conn.port.unwrap_or(if driver_scheme == "oracle" { 1521 } else { 3306 });
             let user = conn.user.as_deref().unwrap();
             let database = conn.database.as_deref();
             let sslmode = conn.sslmode.as_deref();
-            build_mysql_url(host, port, user, Some(&pw), database, sslmode)
+            build_db_url(driver_scheme, host, port, user, Some(&pw), database, sslmode)
         }
     } else if matches!(password_source, PasswordSource::EnvVar) {
         if let Some(ref u) = conn.url {
@@ -462,11 +481,11 @@ pub(crate) fn resolve_single_connection(
         } else {
             let pw = std::env::var("POLARDB_MYSQL_PASSWORD").unwrap_or_default();
             let host = conn.host.as_deref().unwrap();
-            let port = conn.port.unwrap_or(3306);
+            let port = conn.port.unwrap_or(if driver_scheme == "oracle" { 1521 } else { 3306 });
             let user = conn.user.as_deref().unwrap();
             let database = conn.database.as_deref();
             let sslmode = conn.sslmode.as_deref();
-            build_mysql_url(host, port, user, Some(&pw), database, sslmode)
+            build_db_url(driver_scheme, host, port, user, Some(&pw), database, sslmode)
         }
     } else {
         url
@@ -550,6 +569,7 @@ pub(crate) fn build_lazy_resolver(
     let user = conn.user.clone();
     let database = conn.database.clone();
     let sslmode = conn.sslmode.clone();
+    let driver = conn.driver.clone();
     let name = conn.name.clone();
     let name_clone = conn.name.clone();
     let keyring_user = conn.keyring_username();
@@ -564,14 +584,16 @@ pub(crate) fn build_lazy_resolver(
         let host = host
             .as_deref()
             .ok_or_else(|| format!("connection '{}' has no host or url", name_clone))?;
-        let port = port.unwrap_or(3306);
+        let scheme = driver.as_deref().unwrap_or("mysql");
+        let port = port.unwrap_or(if scheme == "oracle" { 1521 } else { 3306 });
         let user = user
             .as_deref()
             .ok_or_else(|| format!("connection '{}' has no user or url", name_clone))?;
         let database = database.as_deref();
         let sslmode = sslmode.as_deref();
 
-        Ok(build_mysql_url(
+        Ok(build_db_url(
+            scheme,
             host,
             port,
             user,
@@ -751,6 +773,7 @@ mod tests {
         let conn = NamedConnection {
             name: "dev".to_string(),
             url: None,
+            driver: None,
             host: Some("localhost".to_string()),
             port: Some(3306),
             user: Some("root".to_string()),

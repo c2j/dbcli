@@ -12,9 +12,11 @@ path = "src/main.rs"
 [features]
 default = []
 integration = []
+oracle = ["oracle-rs"]
 
 [dependencies]
 mysql_async = { version = "0.37", default-features = false, features = ["default-rustls"] }
+oracle-rs = { version = "0.1", optional = true }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 rmcp = { version = "1.5.0", features = ["server", "macros", "transport-io"] }
@@ -32,3 +34,4 @@ rustyline-derive = "0.12"
 rpassword = "7"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 csv = "1"
+async-trait = "0.1"
