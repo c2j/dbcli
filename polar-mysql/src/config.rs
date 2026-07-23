@@ -93,6 +93,7 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct NamedConnection {
+    #[serde(default)]
     pub name: String,
     pub url: Option<String>,
     pub driver: Option<String>,
