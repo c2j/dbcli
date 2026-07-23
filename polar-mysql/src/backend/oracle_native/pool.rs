@@ -25,13 +25,16 @@ impl OraclePool {
 #[async_trait]
 impl DbPool for OraclePool {
     async fn acquire(&self) -> Result<Box<dyn DbConn + Send>, DbError> {
-        let conn = oracle::Connection::connect(
-            &self.user,
-            &self.password,
-            &self.conn_str,
-        )
-        .map_err(|e| DbError::connection_with_source("Oracle connection failed", e))?;
-        Ok(Box::new(OracleConn::new(conn)))
+        let user = self.user.clone();
+        let password = self.password.clone();
+        let conn_str = self.conn_str.clone();
+        tokio::task::spawn_blocking(move || {
+            oracle::Connection::connect(&user, &password, &conn_str)
+                .map_err(|e| DbError::connection_with_source("Oracle connection failed", e))
+        })
+        .await
+        .map_err(|e| DbError::connection(format!("Oracle connect task panicked: {}", e)))?
+        .map(|conn| Box::new(OracleConn::new(conn)) as Box<dyn DbConn + Send>)
     }
 }
 
