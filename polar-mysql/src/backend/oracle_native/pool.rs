@@ -65,7 +65,37 @@ fn parse_oracle_url(url: &str) -> Result<(String, String, String), DbError> {
 
     let conn_str = format!("//{}/{}", host_port, service_name);
 
-    Ok((conn_str, user.to_string(), password.to_string()))
+    Ok((
+        conn_str,
+        percent_decode(user),
+        percent_decode(password),
+    ))
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.bytes();
+    while let Some(b) = chars.next() {
+        if b == b'%' {
+            let hi = chars.next().unwrap_or(b'0');
+            let lo = chars.next().unwrap_or(b'0');
+            if let Ok(decoded) = u8::from_str_radix(
+                &format!("{}{}", hi as char, lo as char),
+                16,
+            ) {
+                result.push(decoded as char);
+            } else {
+                result.push('%');
+                result.push(hi as char);
+                result.push(lo as char);
+            }
+        } else if b == b'+' {
+            result.push(' ');
+        } else {
+            result.push(b as char);
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -85,6 +115,30 @@ mod tests {
     #[test]
     fn test_parse_missing_scheme() {
         assert!(parse_oracle_url("mysql://user:pass@host/db").is_err());
+    }
+
+    #[test]
+    fn test_percent_decode_simple() {
+        assert_eq!(percent_decode("hello"), "hello");
+    }
+
+    #[test]
+    fn test_percent_decode_special_chars() {
+        assert_eq!(percent_decode("p%40ss%3Aword"), "p@ss:word");
+    }
+
+    #[test]
+    fn test_percent_decode_spaces() {
+        assert_eq!(percent_decode("hello+world"), "hello world");
+    }
+
+    #[test]
+    fn test_parse_oracle_url_with_encoded_password() {
+        let (conn_str, user, password) =
+            parse_oracle_url("oracle://scott:p%40ss%3Aword@localhost:1521/ORCL").unwrap();
+        assert_eq!(user, "scott");
+        assert_eq!(password, "p@ss:word");
+        assert_eq!(conn_str, "//localhost:1521/ORCL");
     }
 }
 
