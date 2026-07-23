@@ -1,25 +1,17 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use mysql_async::prelude::*;
-use mysql_async::Pool;
-
+use serde_json::Value;
 use tracing::{info, warn};
 
+use crate::backend::factory::BackendRegistry;
+use crate::backend::DbConn;
+pub(crate) use crate::backend::QueryResult;
 use crate::config::{
     read_config, resolve_env_var_connection, resolve_single_connection,
     rewrite_password_to_sentinel, store_keyring_password, TimeoutConfig,
 };
-use crate::connection::do_connect;
 use crate::output;
-use crate::server::format_error_chain;
-
-#[derive(Debug, Clone)]
-pub(crate) struct QueryResult {
-    pub columns: Vec<String>,
-    pub rows: Vec<Vec<serde_json::Value>>,
-    pub row_count: usize,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum OutputFormat {
@@ -58,12 +50,12 @@ pub(crate) struct CliArgs {
     pub timeout_action: Option<String>,
 }
 
-fn value_to_compact_string(v: &serde_json::Value) -> String {
+fn value_to_compact_string(v: &Value) -> String {
     match v {
-        serde_json::Value::Null => "NULL".to_string(),
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::Bool(b) => b.to_string(),
+        Value::Null => "NULL".to_string(),
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
         other => other.to_string(),
     }
 }
@@ -113,12 +105,10 @@ fn is_read_only_query(sql: &str) -> bool {
         || upper.starts_with("WITH")
 }
 
-/// Check if the SQL is a read-only SELECT/EXPLAIN/SHOW/DESC query for MCP enforcement.
 pub(crate) fn is_read_only_mcp(sql: &str) -> bool {
     let trimmed = sql.trim();
     let stripped = strip_leading_comments(trimmed);
     let upper = stripped.to_uppercase();
-    // For MCP, be strict: only allow SELECT, EXPLAIN, SHOW, DESCRIBE, DESC
     upper.starts_with("SELECT")
         || upper.starts_with("EXPLAIN")
         || upper.starts_with("SHOW")
@@ -127,47 +117,16 @@ pub(crate) fn is_read_only_mcp(sql: &str) -> bool {
 }
 
 pub(crate) async fn execute_query(
-    conn: &mut mysql_async::Conn,
+    conn: &mut dyn DbConn,
     sql: &str,
 ) -> Result<QueryResult, String> {
     let trimmed = sql.trim();
     if trimmed.is_empty() {
         return Err("Empty SQL statement".to_string());
     }
-
-    let rows: Vec<mysql_async::Row> = conn
-        .query(trimmed)
+    conn.query(trimmed)
         .await
-        .map_err(|e| format!("Query failed: {}", e))?;
-
-    if rows.is_empty() {
-        return Ok(QueryResult {
-            columns: vec![],
-            rows: vec![],
-            row_count: 0,
-        });
-    }
-
-    let columns: Vec<String> = rows[0]
-        .columns_ref()
-        .iter()
-        .map(|c| c.name_str().to_string())
-        .collect();
-
-    let mut result_rows: Vec<Vec<serde_json::Value>> = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let mut result_row: Vec<serde_json::Value> = Vec::with_capacity(columns.len());
-        for idx in 0..columns.len() {
-            result_row.push(output::format_row_value(row, idx));
-        }
-        result_rows.push(result_row);
-    }
-
-    Ok(QueryResult {
-        columns,
-        rows: result_rows,
-        row_count: rows.len(),
-    })
+        .map_err(|e| format!("Query failed: {}", e))
 }
 
 pub(crate) fn render_result(
@@ -240,8 +199,10 @@ pub(crate) fn render_result(
     Ok(())
 }
 
-pub(crate) async fn run_cli(args: CliArgs) -> Result<(), String> {
-    // 1. Get SQL from -c, -f, or stdin
+pub(crate) async fn run_cli(
+    args: CliArgs,
+    registry: &BackendRegistry,
+) -> Result<(), String> {
     let sql = if let Some(s) = &args.sql {
         s.clone()
     } else if let Some(f) = &args.file {
@@ -258,11 +219,9 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<(), String> {
         return Err("No SQL provided. Use -c/--sql, -f/--file, or pipe SQL to stdin.".to_string());
     }
 
-    // 2. Load config
     let config_path = args.config_path.map(PathBuf::from);
     let raw = read_config(config_path)?;
 
-    // 3. Find target connection
     let target_name = args.connection_name.as_deref().unwrap_or(&raw.default_name);
     let target_conn = raw
         .connections
@@ -286,7 +245,6 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<(), String> {
         )?
     };
 
-    // 4. Build effective timeout
     let effective_timeout = TimeoutConfig::from_overrides(
         args.statement_timeout.as_deref(),
         args.connection_max_lifetime.as_deref(),
@@ -294,12 +252,21 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<(), String> {
     )
     .map_err(|e| format!("Invalid timeout configuration: {}", e))?;
 
-    // 5. Connect
-    let (pool, mut conn) = do_connect(&target.connection_url, Some(&effective_timeout))
-        .await
-        .map_err(|e| format!("Connection failed: {}", format_error_chain(e.as_ref())))?;
+    let scheme = target.connection_url.find("://").map(|i| &target.connection_url[..i]).unwrap_or("mysql");
+    let factory = registry
+        .get_by_scheme(scheme)
+        .ok_or_else(|| format!("No backend registered for scheme '{}'", scheme))?;
 
-    // 6. Migrate plaintext password to OS keychain on successful connection
+    let pool = factory
+        .connect(&target.connection_url, Some(&effective_timeout))
+        .await
+        .map_err(|e| format!("Connection failed: {}", e))?;
+
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|e| format!("Failed to acquire connection: {}", e))?;
+
     if let (Some(path), Some(plaintext)) = (&target.config_path, &target.plaintext_password) {
         info!(
             "migrating plaintext password to OS keychain for '{}'",
@@ -325,21 +292,16 @@ pub(crate) async fn run_cli(args: CliArgs) -> Result<(), String> {
         }
     }
 
-    // 7. Execute SQL
-    let result = execute_query(&mut conn, &sql).await?;
-
-    // 8. Render output
+    let result = execute_query(&mut *conn, &sql).await?;
     render_result(&result, &mut std::io::stdout(), args.format)?;
 
-    // 9. Apply timeout_action (disconnect recycles connection)
-    crate::connection::apply_timeout_action(&mut conn, args.timeout_action.as_deref()).await;
-
-    // 10. Disconnect (with timeout to avoid hanging on graceful shutdown)
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        Pool::clone(&pool).disconnect(),
-    )
-    .await;
+    if let Some(action) = args.timeout_action.as_deref() {
+        if action == "disconnect" {
+            if let Some(kill_sql) = conn.dialect().kill_own_connection_sql() {
+                let _ = conn.query_drop(&kill_sql).await;
+            }
+        }
+    }
 
     Ok(())
 }
@@ -417,28 +379,21 @@ mod tests {
 
     #[test]
     fn test_value_compact_null_and_string() {
-        assert_eq!(value_to_compact_string(&serde_json::Value::Null), "NULL");
+        assert_eq!(value_to_compact_string(&Value::Null), "NULL");
         assert_eq!(
-            value_to_compact_string(&serde_json::Value::String("hello".into())),
+            value_to_compact_string(&Value::String("hello".into())),
             "hello"
         );
+        assert_eq!(value_to_compact_string(&Value::Bool(true)), "true");
         assert_eq!(
-            value_to_compact_string(&serde_json::Value::Bool(true)),
-            "true"
-        );
-        assert_eq!(
-            value_to_compact_string(&serde_json::Value::Number(serde_json::Number::from(42))),
+            value_to_compact_string(&Value::Number(serde_json::Number::from(42))),
             "42"
         );
     }
 
     #[test]
     fn test_render_result_empty_query() {
-        let result = QueryResult {
-            columns: vec![],
-            rows: vec![],
-            row_count: 0,
-        };
+        let result = QueryResult::empty();
         let mut buf: Vec<u8> = Vec::new();
         render_result(&result, &mut buf, OutputFormat::Table).unwrap();
         let output = String::from_utf8(buf).unwrap();
@@ -450,8 +405,8 @@ mod tests {
         let result = QueryResult {
             columns: vec!["a".into(), "b".into()],
             rows: vec![vec![
-                serde_json::Value::String("1".into()),
-                serde_json::Value::String("2".into()),
+                Value::String("1".into()),
+                Value::String("2".into()),
             ]],
             row_count: 1,
         };
@@ -467,8 +422,8 @@ mod tests {
         let result = QueryResult {
             columns: vec!["a".into(), "b".into()],
             rows: vec![vec![
-                serde_json::Value::String("1".into()),
-                serde_json::Value::String("2".into()),
+                Value::String("1".into()),
+                Value::String("2".into()),
             ]],
             row_count: 1,
         };
@@ -486,7 +441,7 @@ mod tests {
     fn test_render_result_vertical() {
         let result = QueryResult {
             columns: vec!["col".into()],
-            rows: vec![vec![serde_json::Value::String("val".into())]],
+            rows: vec![vec![Value::String("val".into())]],
             row_count: 1,
         };
         let mut buf: Vec<u8> = Vec::new();

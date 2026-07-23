@@ -1,3 +1,4 @@
+mod backend;
 mod cli;
 mod config;
 mod connection;
@@ -11,18 +12,19 @@ use clap::{Parser, Subcommand};
 use keyring::Entry;
 use mysql_async::prelude::*;
 use rmcp::{transport::stdio, ServiceExt};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
+use crate::backend::factory::BackendRegistry;
+use crate::backend::mysql::MySqlFactory;
 use crate::config::{
     default_config_path, read_config, resolve_all_connections_lazy, resolve_env_var_connection,
     resolve_single_connection, rewrite_password_to_sentinel, store_keyring_password,
-    LazyConnectionEntry, PasswordSource, ResolvedConnection, TimeoutConfig, KEYRING_SERVICE,
+    LazyConnectionEntry, PasswordSource, ResolvedConnection, KEYRING_SERVICE,
 };
-use crate::server::{format_error_chain, redact_url, MysqlMcp};
+use crate::server::{format_error_chain, redact_url, DbMcp};
 
 // ─── CLI Structure ─────────────────────────────────────────────────────
 
@@ -640,9 +642,19 @@ async fn parent_death_watchdog(_interval: std::time::Duration) {
     std::future::pending::<()>().await;
 }
 
+// ─── Backend Registry ────────────────────────────────────────────────
+
+fn create_registry() -> BackendRegistry {
+    let mut registry = BackendRegistry::new();
+    registry.register(Arc::new(MySqlFactory));
+    #[cfg(feature = "oracle")]
+    registry.register(Arc::new(crate::backend::oracle::OracleFactory));
+    registry
+}
+
 // ─── MCP Server ────────────────────────────────────────────────────────
 
-async fn run_mcp_server(config_path: Option<String>) {
+async fn run_mcp_server(config_path: Option<String>, registry: Arc<BackendRegistry>) {
     let config_path_buf = config_path.map(PathBuf::from);
 
     let (lazy_entries, default_name) = resolve_all_connections_lazy(config_path_buf)
@@ -653,32 +665,25 @@ async fn run_mcp_server(config_path: Option<String>) {
 
     let mut eager_entries = Vec::new();
     let mut lazy_resolvers = Vec::new();
-    let mut timeout_configs: HashMap<String, TimeoutConfig> = HashMap::new();
 
     for entry in lazy_entries {
         match entry {
             LazyConnectionEntry::Ready(resolved) => {
-                let conn_name = resolved.name.clone();
-                timeout_configs.insert(conn_name.clone(), resolved.timeout_config.clone());
-                eager_entries.push((resolved.name, resolved.connection_url));
+                eager_entries.push((resolved.name, Some(resolved.connection_url)));
             }
-            LazyConnectionEntry::Pending {
-                name,
-                resolver,
-                timeout_config,
-            } => {
-                timeout_configs.insert(name.clone(), timeout_config);
+            LazyConnectionEntry::Pending { name, resolver, .. } => {
                 lazy_resolvers.push((name, resolver));
             }
         }
     }
 
     let server = if !eager_entries.is_empty() && lazy_resolvers.is_empty() {
-        MysqlMcp::new_multi_disconnected(eager_entries, default_name, timeout_configs)
+        DbMcp::new(Arc::clone(&registry), eager_entries, default_name)
     } else if !lazy_resolvers.is_empty() {
         let all_lazy = eager_entries
             .into_iter()
             .map(|(name, url)| {
+                let url = url.unwrap_or_default();
                 (
                     name,
                     Arc::new(move || Ok(url.clone()))
@@ -687,14 +692,18 @@ async fn run_mcp_server(config_path: Option<String>) {
             })
             .chain(lazy_resolvers)
             .collect();
-        MysqlMcp::new_multi_lazy(all_lazy, default_name, timeout_configs)
+        DbMcp::new_with_lazy(
+            Arc::clone(&registry),
+            Vec::new(),
+            all_lazy,
+            default_name,
+        )
     } else {
-        MysqlMcp::new_multi_disconnected(Vec::new(), default_name, HashMap::new())
+        DbMcp::new_empty(Arc::clone(&registry), default_name)
     };
 
     let server = Arc::new(server);
 
-    // Signal + parent-death watchers
     tokio::spawn(async {
         let sig = await_shutdown_signal().await;
         info!("received {sig}, shutting down");
@@ -738,10 +747,11 @@ async fn main() {
     logger::init_logging();
 
     let cli = Cli::parse();
+    let registry = Arc::new(create_registry());
 
     match cli.command {
         None | Some(Commands::Mcp) => {
-            run_mcp_server(cli.config).await;
+            run_mcp_server(cli.config, Arc::clone(&registry)).await;
         }
         Some(Commands::Check { verbose }) => {
             let config_path = cli.config.map(PathBuf::from);
@@ -778,7 +788,7 @@ async fn main() {
                     no_history,
                     timeout_action,
                 };
-                if let Err(e) = interactive::run_interactive(args).await {
+                if let Err(e) = interactive::run_interactive(args, &registry).await {
                     eprintln!("error: {}", e);
                     std::process::exit(1);
                 }
@@ -795,7 +805,7 @@ async fn main() {
                     no_history,
                     timeout_action,
                 };
-                if let Err(e) = cli::run_cli(args).await {
+                if let Err(e) = cli::run_cli(args, &registry).await {
                     eprintln!("error: {}", e);
                     std::process::exit(1);
                 }

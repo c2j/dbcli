@@ -1,20 +1,17 @@
-use mysql_async::prelude::Queryable;
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, ErrorData as McpError},
     tool, tool_handler, tool_router, ServerHandler,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
-use crate::config::TimeoutConfig;
-use crate::connection;
-use crate::output;
-use crate::queries;
+use crate::backend::factory::BackendRegistry;
+use crate::backend::{BackendFactory, DbConn, DbPool};
 
 pub(crate) fn format_error_chain(err: &dyn std::error::Error) -> String {
     let mut parts = vec![err.to_string()];
@@ -27,7 +24,6 @@ pub(crate) fn format_error_chain(err: &dyn std::error::Error) -> String {
 }
 
 pub(crate) fn redact_url(url: &str) -> String {
-    // mysql://user:password@host:port/db -> mask password
     if let Some(at_pos) = url.find('@') {
         if let Some(colon_pos) = url[..at_pos].rfind(':') {
             let prefix = &url[..colon_pos + 1];
@@ -38,15 +34,11 @@ pub(crate) fn redact_url(url: &str) -> String {
     url.to_string()
 }
 
-fn connection_error(url: &str, err: &dyn std::error::Error) -> McpError {
-    let chain = format_error_chain(err);
+fn connection_error(url: &str, err: &str) -> McpError {
     let redacted = redact_url(url);
-    error!(
-        "database connection failed: {} (target: {})",
-        chain, redacted
-    );
+    error!("database connection failed: {} (target: {})", err, redacted);
     McpError::internal_error(
-        format!("Database connection failed: {}", chain),
+        format!("Database connection failed: {}", err),
         Some(json!({
             "target": redacted,
             "hints": [
@@ -65,16 +57,38 @@ fn query_error(tool: &str, sql: &str, err: &str) -> McpError {
     } else {
         sql.to_string()
     };
-
     error!("{} failed: {} (sql: {})", tool, err, sql_preview);
-
     McpError::internal_error(
         format!("{} failed: {}", tool, err),
-        Some(json!({
-            "sql": sql_preview,
-        })),
+        Some(json!({ "sql": sql_preview })),
     )
 }
+
+fn col_str(row: &[Value], idx: usize) -> Option<String> {
+    row.get(idx).and_then(|v| {
+        if v.is_null() {
+            None
+        } else if let Some(s) = v.as_str() {
+            Some(s.to_string())
+        } else {
+            Some(v.to_string())
+        }
+    })
+}
+
+fn col_u64(row: &[Value], idx: usize) -> Option<u64> {
+    row.get(idx).and_then(|v| v.as_u64())
+}
+
+fn col_i32(row: &[Value], idx: usize) -> Option<i32> {
+    row.get(idx).and_then(|v| v.as_i64().map(|n| n as i32))
+}
+
+fn col_bool(row: &[Value], idx: usize) -> Option<bool> {
+    row.get(idx).and_then(|v| v.as_bool())
+}
+
+// ─── MCP Parameter Structs ──────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ConnectionNameParams {
@@ -105,34 +119,21 @@ pub struct ExecuteQueryParams {
 pub struct GetExecutionPlanParams {
     pub sql: String,
     pub analyze: Option<bool>,
-    /// Output format: "TEXT" (default, equivalent to FORMAT=TRADITIONAL) or "JSON"
     #[serde(default)]
     pub format: Option<String>,
-    /// Optional per-call statement timeout in milliseconds.
     #[serde(default)]
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub connection_name: Option<String>,
 }
 
-/// Append `LIMIT N` to a SQL SELECT query if it does not already have LIMIT.
-fn append_limit_if_needed(sql: &str, max_rows: usize) -> String {
-    let trimmed = sql.trim();
-    let upper = trimmed.to_uppercase();
-    // Check for existing LIMIT or TOP clause
-    if !upper.contains("LIMIT") && !upper.contains("TOP ") {
-        format!("{} LIMIT {}", trimmed, max_rows)
-    } else {
-        trimmed.to_string()
-    }
-}
+// ─── Connection State ───────────────────────────────────────────────
 
 type ResolveFn = Arc<dyn (Fn() -> Result<String, String>) + Send + Sync>;
 
-struct ConnectionPool {
-    pool: Arc<mysql_async::Pool>,
+struct ActiveConnection {
+    pool: Arc<dyn DbPool>,
     url: String,
-    timeout_config: TimeoutConfig,
     connected_at: Instant,
 }
 
@@ -140,214 +141,222 @@ enum ConnectionState {
     Pending(ResolveFn),
     Connecting {
         url: String,
-        timeout_config: TimeoutConfig,
     },
-    Connected(ConnectionPool),
+    Connected(ActiveConnection),
     Unavailable(String),
 }
 
-pub struct MysqlMcp {
+// ─── DbMcp ──────────────────────────────────────────────────────────
+
+pub struct DbMcp {
+    registry: Arc<BackendRegistry>,
     connections: Arc<Mutex<HashMap<String, ConnectionState>>>,
     default_name: String,
-    timeout_configs: HashMap<String, TimeoutConfig>,
 }
 
-impl MysqlMcp {
-    pub fn new_multi_disconnected(
-        entries: Vec<(String, String)>,
+impl DbMcp {
+    pub fn new(
+        registry: Arc<BackendRegistry>,
+        entries: Vec<(String, Option<String>)>,
         default_name: String,
-        timeout_configs: HashMap<String, TimeoutConfig>,
     ) -> Self {
         let mut connections = HashMap::new();
-        for (name, url) in entries {
-            let tc = timeout_configs.get(&name).cloned().unwrap_or_default();
-            connections.insert(
-                name,
-                ConnectionState::Connecting {
-                    url,
-                    timeout_config: tc,
-                },
-            );
+        for (name, url_opt) in entries {
+            match url_opt {
+                Some(url) => {
+                    connections.insert(name, ConnectionState::Connecting { url });
+                }
+                None => {}
+            }
         }
         Self {
+            registry,
             connections: Arc::new(Mutex::new(connections)),
             default_name,
-            timeout_configs,
         }
     }
 
-    pub fn new_multi_lazy(
-        entries: Vec<(String, ResolveFn)>,
+    pub fn new_with_lazy(
+        registry: Arc<BackendRegistry>,
+        eager: Vec<(String, String)>,
+        lazy: Vec<(String, ResolveFn)>,
         default_name: String,
-        timeout_configs: HashMap<String, TimeoutConfig>,
     ) -> Self {
         let mut connections = HashMap::new();
-        for (name, resolver) in entries {
+        for (name, url) in eager {
+            connections.insert(name, ConnectionState::Connecting { url });
+        }
+        for (name, resolver) in lazy {
             connections.insert(name, ConnectionState::Pending(resolver));
         }
         Self {
+            registry,
             connections: Arc::new(Mutex::new(connections)),
             default_name,
-            timeout_configs,
+        }
+    }
+
+    pub fn new_empty(registry: Arc<BackendRegistry>, default_name: String) -> Self {
+        Self {
+            registry,
+            connections: Arc::new(Mutex::new(HashMap::new())),
+            default_name,
         }
     }
 
     pub async fn try_connect(&self) {
-        let (name, url, tc) = {
+        let (name, url) = {
             let conns = self.connections.lock().await;
             match conns.get(&self.default_name) {
-                Some(ConnectionState::Connecting {
-                    url,
-                    timeout_config,
-                }) => (
-                    self.default_name.clone(),
-                    url.clone(),
-                    timeout_config.clone(),
-                ),
+                Some(ConnectionState::Connecting { url }) => {
+                    (self.default_name.clone(), url.clone())
+                }
                 _ => return,
             }
         };
 
         info!("probing database connection '{}' at startup", name);
-        let result = connection::do_connect(&url, Some(&tc)).await;
-
-        let mut conns = self.connections.lock().await;
-        match result {
-            Ok((pool, _conn)) => {
+        match self.connect_with_url(&name, &url).await {
+            Ok(_) => {
                 info!("startup probe: database '{}' connected successfully", name);
-                conns.insert(
-                    name,
-                    ConnectionState::Connected(ConnectionPool {
-                        pool,
-                        url: url.clone(),
-                        timeout_config: tc,
-                        connected_at: Instant::now(),
-                    }),
-                );
             }
             Err(e) => {
-                let chain = format_error_chain(e.as_ref());
                 let redacted = redact_url(&url);
                 error!(
                     "startup probe: database '{}' connection failed: {} (target: {})",
-                    name, chain, redacted
+                    name, e, redacted
                 );
+                let mut conns = self.connections.lock().await;
                 conns.insert(name, ConnectionState::Unavailable(url));
             }
         }
+    }
+
+    fn resolve_factory(&self, url: &str) -> Option<&Arc<dyn BackendFactory>> {
+        let scheme = url.find("://").map(|i| &url[..i]).unwrap_or("mysql");
+        self.registry.get_by_scheme(scheme)
     }
 
     async fn get_connection(
         &self,
         connection_name: Option<&str>,
-    ) -> Result<(Arc<mysql_async::Pool>, mysql_async::Conn), McpError> {
+    ) -> Result<(Arc<dyn DbPool>, Box<dyn DbConn + Send>), McpError> {
         let name = connection_name.unwrap_or(&self.default_name).to_string();
-        let conns = self.connections.lock().await;
 
-        match conns.get(&name) {
-            Some(ConnectionState::Connected(pool_state)) => {
-                let pool = Arc::clone(&pool_state.pool);
-                let tc = pool_state.timeout_config.clone();
-                let url = pool_state.url.clone();
+        let (url, should_connect) = {
+            let conns = self.connections.lock().await;
+            match conns.get(&name) {
+                Some(ConnectionState::Connected(active)) => {
+                    let pool = Arc::clone(&active.pool);
+                    let url = active.url.clone();
+                    drop(conns);
 
-                // Check connection max lifetime
-                if let Some(max_lifetime) = tc.connection_max_lifetime {
-                    if pool_state.connected_at.elapsed() >= max_lifetime {
-                        info!(
-                            "connection '{}' exceeded max_lifetime ({:?}), recycling",
-                            name, max_lifetime
-                        );
-                        drop(conns);
-                        return self.connect_with_url(name, url).await;
-                    }
+                    return match pool.acquire().await {
+                        Ok(conn) => Ok((pool, conn)),
+                        Err(e) => {
+                            error!(
+                                "failed to get connection from pool for '{}': {}",
+                                name, e
+                            );
+                            Err(connection_error(&url, &e.to_string()))
+                        }
+                    };
                 }
-
-                match pool.get_conn().await {
-                    Ok(conn) => {
-                        drop(conns);
-                        Ok((pool, conn))
-                    }
-                    Err(e) => {
-                        error!("failed to get connection from pool for '{}': {}", name, e);
-                        drop(conns);
-                        self.connect_with_url(name, url).await
-                    }
+                Some(ConnectionState::Pending(resolver)) => {
+                    let resolver = Arc::clone(resolver);
+                    drop(conns);
+                    let url = resolver().map_err(|e| {
+                        McpError::internal_error(
+                            format!(
+                                "Failed to resolve database credentials for '{}': {}",
+                                name, e
+                            ),
+                            Some(json!({
+                                "connection_name": name,
+                                "hint": "Check your polar-mysql configuration and OS keychain access"
+                            })),
+                        )
+                    })?;
+                    info!(
+                        "connection URL resolved for '{}', attempting database connection",
+                        name
+                    );
+                    (url, true)
                 }
-            }
-            Some(ConnectionState::Pending(resolver)) => {
-                let resolver = Arc::clone(resolver);
-                drop(conns);
-                let url = resolver().map_err(|e| {
-                    McpError::internal_error(
-                        format!(
-                            "Failed to resolve database credentials for '{}': {}",
-                            name, e
-                        ),
+                Some(ConnectionState::Connecting { url })
+                | Some(ConnectionState::Unavailable(url)) => {
+                    (url.clone(), true)
+                }
+                None => {
+                    let available: Vec<&String> = conns.keys().collect();
+                    return Err(McpError::invalid_request(
+                        "unknown_connection",
                         Some(json!({
-                            "connection_name": name,
-                            "hint": "Check your polar-mysql configuration and OS keychain access"
+                            "message": format!("Connection '{}' not found", name),
+                            "available_connections": available,
+                            "default_connection": self.default_name,
                         })),
-                    )
-                })?;
-                info!(
-                    "connection URL resolved for '{}', attempting database connection",
-                    name
-                );
-                self.connect_with_url(name, url).await
+                    ));
+                }
             }
-            Some(ConnectionState::Connecting { url, .. })
-            | Some(ConnectionState::Unavailable(url)) => {
-                let url = url.clone();
-                drop(conns);
-                info!("attempting database connection for '{}'", name);
-                self.connect_with_url(name, url).await
-            }
-            None => {
-                let available: Vec<&String> = conns.keys().collect();
-                Err(McpError::invalid_request(
-                    "unknown_connection",
-                    Some(json!({
-                        "message": format!("Connection '{}' not found", name),
-                        "available_connections": available,
-                        "default_connection": self.default_name,
-                    })),
-                ))
-            }
+        };
+
+        if should_connect {
+            info!("attempting database connection for '{}'", name);
+            self.connect_with_url(&name, &url).await
+        } else {
+            Err(McpError::internal_error(
+                format!("Connection '{}' is in an unexpected state", name),
+                None,
+            ))
         }
     }
 
     async fn connect_with_url(
         &self,
-        name: String,
-        url: String,
-    ) -> Result<(Arc<mysql_async::Pool>, mysql_async::Conn), McpError> {
-        let tc = self.timeout_configs.get(&name).cloned().unwrap_or_default();
-        let result = connection::do_connect(&url, Some(&tc)).await;
-        let mut conns = self.connections.lock().await;
+        name: &str,
+        url: &str,
+    ) -> Result<(Arc<dyn DbPool>, Box<dyn DbConn + Send>), McpError> {
+        let factory =
+            self.resolve_factory(url).ok_or_else(|| {
+                McpError::internal_error(
+                    format!(
+                        "No backend factory found for URL scheme in '{}'",
+                        redact_url(url)
+                    ),
+                    None,
+                )
+            })?;
 
-        match result {
-            Ok((pool, conn)) => {
-                info!("database '{}' connected successfully", name);
-                let conn_pool = ConnectionPool {
-                    pool: Arc::clone(&pool),
-                    url: url.clone(),
-                    timeout_config: tc,
-                    connected_at: Instant::now(),
-                };
-                conns.insert(name, ConnectionState::Connected(conn_pool));
-                Ok((pool, conn))
-            }
-            Err(e) => {
-                let err = connection_error(&url, e.as_ref());
-                conns.insert(name, ConnectionState::Unavailable(url));
-                Err(err)
-            }
-        }
+        let pool = factory.connect(url, None).await.map_err(|e| {
+            let chain = format_error_chain(&e);
+            connection_error(url, &chain)
+        })?;
+
+        let conn = pool.acquire().await.map_err(|e| {
+            let chain = format_error_chain(&e);
+            connection_error(url, &chain)
+        })?;
+
+        info!("database '{}' connected successfully", name);
+
+        let active = ActiveConnection {
+            pool: Arc::clone(&pool),
+            url: url.to_string(),
+            connected_at: Instant::now(),
+        };
+
+        let mut conns = self.connections.lock().await;
+        conns.insert(name.to_string(), ConnectionState::Connected(active));
+
+        Ok((pool, conn))
     }
 }
 
+// ─── Tool Implementations ───────────────────────────────────────────
+
 #[tool_router]
-impl MysqlMcp {
+impl DbMcp {
     #[tool(description = "Get database version and server information")]
     async fn get_database_info(
         &self,
@@ -361,38 +370,32 @@ impl MysqlMcp {
             .get_connection(params.connection_name.as_deref())
             .await?;
 
-        let row: mysql_async::Row = match conn.query_first(queries::DATABASE_INFO).await {
-            Ok(Some(row)) => row,
-            Ok(None) => {
-                return Err(McpError::internal_error(
-                    "get_database_info returned no rows",
-                    None,
-                ));
-            }
-            Err(e) => {
-                return Err(query_error(
-                    "get_database_info",
-                    queries::DATABASE_INFO,
-                    &e.to_string(),
-                ));
-            }
-        };
+        let sql = { conn.dialect().database_info().to_string() };
+        let result = conn.query(&sql).await.map_err(|e| {
+            query_error("get_database_info", &sql, &e.to_string())
+        })?;
 
-        let result = json!({
-            "version": output::get_column_string(&row, 0),
-            "database": output::get_column_string(&row, 1),
-            "current_user": output::get_column_string(&row, 2),
-            "hostname": output::get_column_string(&row, 3),
-            "port": output::get_column_i32(&row, 4),
-            "os": output::get_column_string(&row, 5),
-            "charset": output::get_column_string(&row, 6),
-            "collation": output::get_column_string(&row, 7),
-            "version_comment": output::get_column_string(&row, 8),
+        if result.rows.is_empty() {
+            return Err(McpError::internal_error(
+                "get_database_info returned no rows",
+                None,
+            ));
+        }
+
+        let row = &result.rows[0];
+        let output = json!({
+            "version": col_str(row, 0),
+            "database": col_str(row, 1),
+            "current_user": col_str(row, 2),
+            "hostname": col_str(row, 3),
+            "port": col_i32(row, 4),
+            "os": col_str(row, 5),
+            "charset": col_str(row, 6),
+            "collation": col_str(row, 7),
+            "version_comment": col_str(row, 8),
         });
 
-        Ok(CallToolResult::success(vec![Content::text(
-            result.to_string(),
-        )]))
+        Ok(CallToolResult::success(vec![Content::text(output.to_string())]))
     }
 
     #[tool(description = "List all user tables and views in the database")]
@@ -408,28 +411,23 @@ impl MysqlMcp {
             .get_connection(params.connection_name.as_deref())
             .await?;
 
-        let rows: Vec<mysql_async::Row> = match conn.query(queries::LIST_TABLES).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                return Err(query_error(
-                    "list_tables",
-                    queries::LIST_TABLES,
-                    &e.to_string(),
-                ));
-            }
-        };
+        let sql = { conn.dialect().list_tables().to_string() };
+        let result = conn.query(&sql).await.map_err(|e| {
+            query_error("list_tables", &sql, &e.to_string())
+        })?;
 
-        let tables: Vec<serde_json::Value> = rows
+        let tables: Vec<serde_json::Value> = result
+            .rows
             .iter()
             .map(|row| {
                 json!({
-                    "schema_name": output::get_column_string(row, 0),
-                    "table_name": output::get_column_string(row, 1),
-                    "table_type": output::get_column_string(row, 2),
-                    "engine": output::get_column_string(row, 3),
-                    "row_count": output::get_column_u64(row, 4),
-                    "total_size": output::get_column_u64(row, 5),
-                    "comment": output::get_column_string(row, 6),
+                    "schema_name": col_str(row, 0),
+                    "table_name": col_str(row, 1),
+                    "table_type": col_str(row, 2),
+                    "engine": col_str(row, 3),
+                    "row_count": col_u64(row, 4),
+                    "total_size": col_u64(row, 5),
+                    "comment": col_str(row, 6),
                 })
             })
             .collect();
@@ -446,11 +444,6 @@ impl MysqlMcp {
     ) -> Result<CallToolResult, McpError> {
         let schema = params.schema_name.as_deref().unwrap_or("public");
         let table = &params.table_name;
-        let _name = params
-            .connection_name
-            .as_deref()
-            .unwrap_or(&self.default_name)
-            .to_string();
         info!(
             "tool called: get_table_metadata schema={} table={} connection={}",
             schema,
@@ -461,68 +454,50 @@ impl MysqlMcp {
             .get_connection(params.connection_name.as_deref())
             .await?;
 
-        // Get columns
-        let columns_rows: Vec<mysql_async::Row> =
-            match conn.exec(queries::TABLE_COLUMNS, (schema, table)).await {
-                Ok(rows) => rows,
-                Err(e) => {
-                    return Err(query_error(
-                        "get_table_metadata (columns)",
-                        queries::TABLE_COLUMNS,
-                        &e.to_string(),
-                    ));
-                }
-            };
+        let sql = { conn.dialect().table_columns().to_string() };
+        let col_result = conn
+            .exec(&sql, &[Value::String(schema.to_string()), Value::String(table.clone())])
+            .await
+            .map_err(|e| query_error("get_table_metadata (columns)", &sql, &e.to_string()))?;
 
-        let columns: Vec<serde_json::Value> = columns_rows
+        let columns: Vec<serde_json::Value> = col_result
+            .rows
             .iter()
             .map(|row| {
                 json!({
-                    "column_name": output::get_column_string(row, 0),
-                    "data_type": output::get_column_string(row, 1),
-                    "nullable": output::get_column_bool(row, 2),
-                    "default_value": output::get_column_string(row, 3),
-                    "ordinal_position": output::get_column_i32(row, 4),
-                    "comment": output::get_column_string(row, 5),
-                    "column_key": output::get_column_string(row, 6),
+                    "column_name": col_str(row, 0),
+                    "data_type": col_str(row, 1),
+                    "nullable": col_bool(row, 2),
+                    "default_value": col_str(row, 3),
+                    "ordinal_position": col_i32(row, 4),
+                    "comment": col_str(row, 5),
+                    "column_key": col_str(row, 6),
                 })
             })
             .collect();
 
-        // Get indexes
-        let idx_rows: Vec<mysql_async::Row> =
-            match conn.exec(queries::TABLE_INDEXES, (schema, table)).await {
-                Ok(rows) => rows,
-                Err(e) => {
-                    return Err(query_error(
-                        "get_table_metadata (indexes)",
-                        queries::TABLE_INDEXES,
-                        &e.to_string(),
-                    ));
-                }
-            };
+        let idx_sql = { conn.dialect().table_indexes().to_string() };
+        let idx_result = conn
+            .exec(&idx_sql, &[Value::String(schema.to_string()), Value::String(table.clone())])
+            .await
+            .map_err(|e| query_error("get_table_metadata (indexes)", &idx_sql, &e.to_string()))?;
 
-        let indexes: Vec<serde_json::Value> = idx_rows
+        let indexes: Vec<serde_json::Value> = idx_result
+            .rows
             .iter()
             .map(|row| {
                 json!({
-                    "index_name": output::get_column_string(row, 0),
-                    "is_unique": output::get_column_bool(row, 1),
-                    "is_primary": output::get_column_bool(row, 2),
-                    "columns": output::get_column_string(row, 3),
-                    "index_type": output::get_column_string(row, 4),
+                    "index_name": col_str(row, 0),
+                    "is_unique": col_bool(row, 1),
+                    "is_primary": col_bool(row, 2),
+                    "columns": col_str(row, 3),
+                    "index_type": col_str(row, 4),
                 })
             })
             .collect();
 
-        let result = json!({
-            "columns": columns,
-            "indexes": indexes,
-        });
-
-        Ok(CallToolResult::success(vec![Content::text(
-            result.to_string(),
-        )]))
+        let result = json!({ "columns": columns, "indexes": indexes });
+        Ok(CallToolResult::success(vec![Content::text(result.to_string())]))
     }
 
     #[tool(description = "Execute a read-only SQL query (SELECT or EXPLAIN only)")]
@@ -531,17 +506,15 @@ impl MysqlMcp {
         Parameters(params): Parameters<ExecuteQueryParams>,
     ) -> Result<CallToolResult, McpError> {
         let trimmed = params.sql.trim();
-        let _upper = trimmed.to_uppercase();
-        let _name = params
-            .connection_name
-            .as_deref()
-            .unwrap_or(&self.default_name)
-            .to_string();
         debug!(
             "tool called: execute_query sql_len={} connection={}",
             trimmed.len(),
             params.connection_name.as_deref().unwrap_or("(default)")
         );
+
+        let (_pool, mut conn) = self
+            .get_connection(params.connection_name.as_deref())
+            .await?;
 
         if !crate::cli::is_read_only_mcp(trimmed) {
             error!(
@@ -550,77 +523,52 @@ impl MysqlMcp {
             );
             return Err(McpError::invalid_request(
                 "invalid_query",
-                Some(
-                    json!({ "message": "Only SELECT, EXPLAIN, SHOW, and DESCRIBE queries are allowed" }),
-                ),
+                Some(json!({
+                    "message": "Only SELECT, EXPLAIN, SHOW, and DESCRIBE queries are allowed"
+                })),
             ));
         }
 
-        let (_pool, mut conn) = self
-            .get_connection(params.connection_name.as_deref())
-            .await?;
-
-        // Apply per-query timeout if specified
         if let Some(timeout_ms) = params.timeout_ms {
-            let set_sql = format!("SET max_execution_time = {}", timeout_ms);
-            let _ = conn.query_drop(&set_sql).await;
+            if let Some(set_sql) = conn.dialect().set_statement_timeout_sql(timeout_ms) {
+                let _ = conn.query_drop(&set_sql).await;
+            }
         }
 
-        // Enforce max_rows at the server level by appending LIMIT
         let max_rows = params.max_rows.unwrap_or(1000).clamp(1, 10000);
-        let sql_to_execute = append_limit_if_needed(trimmed, max_rows);
+        let sql_to_execute = conn.dialect().add_limit(trimmed, max_rows);
 
-        let rows: Vec<mysql_async::Row> = match conn.query(&sql_to_execute).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                return Err(query_error("execute_query", trimmed, &e.to_string()));
-            }
-        };
+        let result = conn.query(&sql_to_execute).await.map_err(|e| {
+            query_error("execute_query", trimmed, &e.to_string())
+        })?;
 
-        if rows.is_empty() {
+        if result.rows.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
                 json!({"columns": [], "rows": [], "row_count": 0}).to_string(),
             )]));
         }
 
-        let total_count = rows.len();
+        let total_count = result.row_count;
         let truncated = total_count > max_rows;
         let visible = if truncated {
-            &rows[..max_rows]
+            &result.rows[..max_rows]
         } else {
-            &rows[..]
+            &result.rows[..]
         };
 
-        let columns: Vec<String> = rows[0]
-            .columns_ref()
-            .iter()
-            .map(|c| c.name_str().to_string())
-            .collect();
-
-        let mut result_rows: Vec<Vec<serde_json::Value>> = Vec::with_capacity(visible.len());
-        for row in visible {
-            let mut result_row: Vec<serde_json::Value> = Vec::with_capacity(columns.len());
-            for idx in 0..columns.len() {
-                result_row.push(output::format_row_value(row, idx));
-            }
-            result_rows.push(result_row);
-        }
-
-        let mut result = json!({
-            "columns": columns,
-            "rows": result_rows,
+        let mut output = json!({
+            "columns": result.columns,
+            "rows": visible,
             "row_count": total_count,
         });
         if truncated {
-            result["truncated"] = json!(true);
-            result["hint"] = json!(format!(
+            output["truncated"] = json!(true);
+            output["hint"] = json!(format!(
                 "Result exceeds max_rows ({max_rows}). Use CLI mode for full output.",
             ));
         }
 
-        Ok(CallToolResult::success(vec![Content::text(
-            result.to_string(),
-        )]))
+        Ok(CallToolResult::success(vec![Content::text(output.to_string())]))
     }
 
     #[tool(description = "Get the execution plan for a SQL query")]
@@ -628,11 +576,6 @@ impl MysqlMcp {
         &self,
         Parameters(params): Parameters<GetExecutionPlanParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _name = params
-            .connection_name
-            .as_deref()
-            .unwrap_or(&self.default_name)
-            .to_string();
         info!(
             "tool called: get_execution_plan analyze={} connection={}",
             params.analyze.unwrap_or(false),
@@ -643,50 +586,33 @@ impl MysqlMcp {
             .get_connection(params.connection_name.as_deref())
             .await?;
 
-        // Apply per-query timeout if specified
         if let Some(timeout_ms) = params.timeout_ms {
-            let set_sql = format!("SET max_execution_time = {}", timeout_ms);
-            let _ = conn.query_drop(&set_sql).await;
+            if let Some(set_sql) = conn.dialect().set_statement_timeout_sql(timeout_ms) {
+                let _ = conn.query_drop(&set_sql).await;
+            }
         }
 
         let analyze = params.analyze.unwrap_or(false);
         let fmt = params.format.as_deref().unwrap_or("TEXT");
-        let explain_sql = if analyze {
-            format!("EXPLAIN ANALYZE {}", params.sql)
-        } else {
-            let format_clause = match fmt.to_uppercase().as_str() {
-                "JSON" => "FORMAT=JSON",
-                _ => "", // TEXT / TRADITIONAL is the default EXPLAIN output
-            };
-            if format_clause.is_empty() {
-                format!("EXPLAIN {}", params.sql)
-            } else {
-                format!("EXPLAIN {} {}", format_clause, params.sql)
-            }
-        };
+        let explain_sql = conn.dialect().build_explain(&params.sql, analyze, fmt);
 
-        let rows: Vec<mysql_async::Row> = match conn.query(&explain_sql).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                return Err(query_error(
-                    "get_execution_plan",
-                    &explain_sql,
-                    &e.to_string(),
-                ));
-            }
-        };
+        let result = conn.query(&explain_sql).await.map_err(|e| {
+            query_error("get_execution_plan", &explain_sql, &e.to_string())
+        })?;
 
-        let plan: String = rows
+        let plan: String = result
+            .rows
             .iter()
-            .filter_map(|row| row.get_opt::<String, usize>(0).and_then(|r| r.ok()))
+            .filter_map(|row| {
+                row.first()
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .or_else(|| row.first().map(|v| v.to_string()))
+            })
             .collect::<Vec<String>>()
             .join("\n");
 
-        let result = json!({ "plan": plan });
-
-        Ok(CallToolResult::success(vec![Content::text(
-            result.to_string(),
-        )]))
+        let output = json!({ "plan": plan });
+        Ok(CallToolResult::success(vec![Content::text(output.to_string())]))
     }
 
     #[tool(description = "List all configured database connections")]
@@ -697,7 +623,7 @@ impl MysqlMcp {
             .iter()
             .map(|(name, state)| {
                 let status = match state {
-                    ConnectionState::Connected { .. } => "connected",
+                    ConnectionState::Connected(_) => "connected",
                     ConnectionState::Connecting { .. } => "connecting",
                     ConnectionState::Pending(_) => "pending",
                     ConnectionState::Unavailable(_) => "unavailable",
@@ -715,15 +641,13 @@ impl MysqlMcp {
             "default_connection": self.default_name,
         });
 
-        Ok(CallToolResult::success(vec![Content::text(
-            result.to_string(),
-        )]))
+        Ok(CallToolResult::success(vec![Content::text(result.to_string())]))
     }
 }
 
 #[tool_handler(
     name = "polar-mysql",
-    version = "0.1.16",
+    version = "0.2.1",
     instructions = "MCP server for MySQL/PolarDB-X database introspection with multi-connection support"
 )]
-impl ServerHandler for MysqlMcp {}
+impl ServerHandler for DbMcp {}
