@@ -4,6 +4,6 @@ default_connection = "oracle"
 database = "FREEPDB1"
 driver = "oracle"
 host = "127.0.0.1"
-password = "keyring"
+password = "testpass"
 port = 1521
 user = "system"

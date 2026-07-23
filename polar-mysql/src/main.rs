@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use crate::backend::factory::BackendRegistry;
+use crate::backend::DbConn;
 use crate::backend::mysql::MySqlFactory;
 use crate::config::{
     default_config_path, read_config, resolve_all_connections_lazy, resolve_env_var_connection,
@@ -342,13 +343,86 @@ async fn try_connect_tls_verify(
     Ok((conn, elapsed))
 }
 
-async fn handle_check_connection(resolved: &ResolvedConnection, verbose: bool) {
+async fn do_oracle_check(
+    resolved: &ResolvedConnection,
+    registry: &BackendRegistry,
+    verbose: bool,
+) {
     let base_url = &resolved.connection_url;
-    let _redacted = redact_url(base_url);
 
     eprintln!("Connection: {}", resolved.name);
     eprintln!();
+    print_password_status(resolved);
 
+    let factory = match registry.get_by_scheme("oracle") {
+        Some(f) => f,
+        None => {
+            eprintln!("  ✗ Oracle backend not available (build with --features oracle)");
+            return;
+        }
+    };
+
+    eprintln!("[1/1] Connecting to Oracle ...");
+    let start = Instant::now();
+    match factory.connect(base_url, None).await {
+        Ok(pool) => {
+            let elapsed = start.elapsed();
+            match pool.acquire().await {
+                Ok(mut conn) => {
+                    let ver = {
+                        let sql = conn.dialect().database_info().to_string();
+                        conn.query(&sql).await.ok().and_then(|r| {
+                            r.rows.first().and_then(|row| {
+                                row.first().and_then(|v| v.as_str().map(|s| s.to_string()))
+                            })
+                        })
+                    };
+                    eprintln!(
+                        "  ✓ Oracle  — {}ms  {}",
+                        elapsed.as_millis(),
+                        ver.as_deref().unwrap_or("(unknown)")
+                    );
+                    if verbose {
+                        print_oracle_verbose(&mut *conn, elapsed).await;
+                    }
+                    migrate_password_if_needed(resolved);
+                }
+                Err(e) => {
+                    eprintln!("  ✗ Oracle  — FAILED: {}", format_error_chain(&e));
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("  ✗ Oracle  — FAILED: {}", format_error_chain(&e));
+        }
+    }
+}
+
+async fn print_oracle_verbose(conn: &mut dyn DbConn, elapsed: Duration) {
+    let sql = { conn.dialect().database_info().to_string() };
+    match conn.query(&sql).await {
+        Ok(result) => {
+            if let Some(row) = result.rows.first() {
+                eprintln!("  [verbose] Connection Details:");
+                eprintln!("    {:<24} {}", "server_version", col_str_or(row, 0));
+                eprintln!("    {:<24} {}", "current_database", col_str_or(row, 1));
+                eprintln!("    {:<24} {}", "current_user", col_str_or(row, 2));
+                eprintln!("    {:<24} {}", "hostname", col_str_or(row, 3));
+                eprintln!("    {:<24} {}", "os", col_str_or(row, 5));
+                eprintln!("    {:<24} {}", "charset", col_str_or(row, 6));
+                eprintln!("    {:<24} {}", "collation", col_str_or(row, 7));
+                eprintln!("    {:<24} {}ms", "connect_time", elapsed.as_millis());
+            }
+        }
+        Err(e) => eprintln!("  [verbose] Failed to get details: {}", e),
+    }
+}
+
+fn col_str_or(row: &[serde_json::Value], idx: usize) -> &str {
+    row.get(idx).and_then(|v| v.as_str()).unwrap_or("--")
+}
+
+fn print_password_status(resolved: &ResolvedConnection) {
     match resolved.password_source {
         PasswordSource::Keyring => {
             eprintln!(
@@ -362,29 +436,18 @@ async fn handle_check_connection(resolved: &ResolvedConnection, verbose: bool) {
                     if pw.is_empty() {
                         eprintln!("  WARNING: keyring returned empty password");
                     } else {
-                        eprintln!(
-                            "  Keyring accessible, password retrieved ({} chars)",
-                            pw.len()
-                        );
+                        eprintln!("  Keyring accessible, password retrieved ({} chars)", pw.len());
                     }
                 }
-                Err(e) => {
-                    eprintln!("  Keyring read-back failed: {}", e);
-                }
+                Err(e) => eprintln!("  Keyring read-back failed: {}", e),
             }
             eprintln!();
         }
         PasswordSource::Plaintext(_) => {
             eprintln!("[Keyring] Password from config file (plaintext)");
             match check_keyring_available(&resolved.keyring_username) {
-                Ok(()) => {
-                    eprintln!(
-                        "  OS keychain is available -- password will be migrated on first successful connection"
-                    );
-                }
-                Err(e) => {
-                    eprintln!("  OS keychain NOT available: {}", e);
-                }
+                Ok(()) => eprintln!("  OS keychain is available -- password will be migrated on first successful connection"),
+                Err(e) => eprintln!("  OS keychain NOT available: {}", e),
             }
             eprintln!();
         }
@@ -397,6 +460,43 @@ async fn handle_check_connection(resolved: &ResolvedConnection, verbose: bool) {
             eprintln!();
         }
     }
+}
+
+fn migrate_password_if_needed(resolved: &ResolvedConnection) {
+    if let (Some(path), Some(plaintext)) = (&resolved.config_path, &resolved.plaintext_password) {
+        info!(
+            "migrating plaintext password to OS keychain for '{}'",
+            resolved.keyring_username
+        );
+        if let Err(e) = store_keyring_password(&resolved.keyring_username, plaintext) {
+            warn!("failed to store password in keychain: {}", e);
+        } else if let Err(e) = rewrite_password_to_sentinel(path, &resolved.name) {
+            warn!("failed to update config file: {}", e);
+        } else {
+            info!(
+                "password migrated to OS keychain for '{}'",
+                resolved.keyring_username
+            );
+        }
+    }
+}
+
+async fn handle_check_connection(
+    resolved: &ResolvedConnection,
+    verbose: bool,
+    registry: &BackendRegistry,
+) {
+    let scheme = resolved.connection_url.find("://").map(|i| &resolved.connection_url[..i]).unwrap_or("mysql");
+
+    if scheme == "oracle" {
+        do_oracle_check(resolved, registry, verbose).await;
+        return;
+    }
+
+    // ── MySQL path (existing TLS probing) ──
+    let base_url = &resolved.connection_url;
+
+    print_password_status(resolved);
 
     let mut results: Vec<TlsCheckResult> = Vec::new();
 
@@ -553,6 +653,7 @@ async fn handle_check_connection_cmd(
     conn_arg: Option<String>,
     verbose: bool,
     config_path: Option<PathBuf>,
+    registry: &BackendRegistry,
 ) {
     let raw = read_config(config_path).unwrap_or_else(|e| {
         eprintln!("error: {}", e);
@@ -587,7 +688,7 @@ async fn handle_check_connection_cmd(
         })
     };
 
-    handle_check_connection(&resolved, verbose).await;
+    handle_check_connection(&resolved, verbose, registry).await;
 }
 
 // ─── Process Lifecycle Helpers ─────────────────────────────────────────
@@ -755,7 +856,7 @@ async fn main() {
         }
         Some(Commands::Check { verbose }) => {
             let config_path = cli.config.map(PathBuf::from);
-            handle_check_connection_cmd(cli.name, verbose, config_path).await;
+            handle_check_connection_cmd(cli.name, verbose, config_path, &registry).await;
         }
         Some(Commands::StorePassword {}) => {
             handle_store_password(cli.name, cli.config);
@@ -774,7 +875,7 @@ async fn main() {
         }) => {
             if check_connection {
                 let config_path = cli.config.map(PathBuf::from);
-                handle_check_connection_cmd(cli.name, verbose, config_path).await;
+                handle_check_connection_cmd(cli.name, verbose, config_path, &registry).await;
             } else if interactive {
                 let fmt: cli::OutputFormat = format.parse().unwrap_or(cli::OutputFormat::Table);
                 let args = cli::CliArgs {
