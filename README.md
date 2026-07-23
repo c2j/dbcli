@@ -1,6 +1,6 @@
-# polar-mysql
+# hepta_dbcli
 
-CLI and MCP server for MySQL/PolarDB-X database introspection.
+CLI and MCP server for MySQL/PolarDB-X/Oracle database introspection.
 
 ## Features
 
@@ -22,7 +22,7 @@ Prebuilt binaries for Linux (x86_64, arm64) and Windows (x86_64) from [GitHub Re
 git clone https://github.com/YOUR_ORG/dbcli.git
 cd dbcli
 cargo build --release -p polar-mysql
-# binary at: target/release/polar-mysql
+# binary at: target/release/hepta_dbcli
 ```
 
 ## Configuration
@@ -79,8 +79,8 @@ Supported units: `ms`, `s`, `min`, `h`, or plain seconds.
 ### MCP server (default)
 
 ```bash
-polar-mysql
-polar-mysql --config /path/to/config.toml
+hepta_dbcli
+hepta_dbcli --config /path/to/config.toml
 ```
 
 Runs on stdio. Intended to be spawned by MCP clients. All queries are read-only (SELECT, EXPLAIN, SHOW, DESCRIBE/DESC only).
@@ -89,28 +89,28 @@ Runs on stdio. Intended to be spawned by MCP clients. All queries are read-only 
 
 ```bash
 # From command line
-polar-mysql cli --sql "SELECT version()"
+hepta_dbcli cli --sql "SELECT version()"
 
 # From file
-polar-mysql cli --file query.sql
+hepta_dbcli cli --file query.sql
 
 # From stdin
-echo "SHOW TABLES" | polar-mysql cli
+echo "SHOW TABLES" | hepta_dbcli cli
 
 # Custom output format
-polar-mysql cli --sql "SELECT * FROM users" --format json
-polar-mysql cli --sql "SELECT * FROM users" --format csv
-polar-mysql cli --sql "SELECT * FROM users" --format vertical
+hepta_dbcli cli --sql "SELECT * FROM users" --format json
+hepta_dbcli cli --sql "SELECT * FROM users" --format csv
+hepta_dbcli cli --sql "SELECT * FROM users" --format vertical
 
 # Target a specific connection
-polar-mysql cli --name prod --sql "SELECT count(*) FROM orders"
+hepta_dbcli cli --name prod --sql "SELECT count(*) FROM orders"
 ```
 
 ### Interactive REPL
 
 ```bash
-polar-mysql cli --interactive
-polar-mysql cli -i --name dev
+hepta_dbcli cli --interactive
+hepta_dbcli cli -i --name dev
 ```
 
 REPL commands:
@@ -130,20 +130,20 @@ End SQL statements with `;` + Enter to execute. Multi-line with incomplete state
 
 ```bash
 # Basic connectivity check
-polar-mysql check
+hepta_dbcli check
 
 # Verbose: shows server version, user, charset, TLS modes
-polar-mysql check --verbose
+hepta_dbcli check --verbose
 
 # Check specific connection
-polar-mysql check --name prod
+hepta_dbcli check --name prod
 ```
 
 ### Store password
 
 ```bash
-polar-mysql store-password
-polar-mysql store-password --name prod
+hepta_dbcli store-password
+hepta_dbcli store-password --name prod
 ```
 
 Prompts for password and stores it in the OS keychain.

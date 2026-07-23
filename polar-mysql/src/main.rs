@@ -29,7 +29,7 @@ use crate::server::{format_error_chain, redact_url, DbMcp};
 // ─── CLI Structure ─────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "polar-mysql", version, about = concat!("CLI and MCP server for MySQL/PolarDB-X database introspection — v", env!("CARGO_PKG_VERSION")))]
+#[command(name = "hepta_dbcli", version, about = concat!("CLI and MCP server for MySQL/PolarDB-X/Oracle database introspection — v", env!("CARGO_PKG_VERSION")))]
 struct Cli {
     /// Path to config file
     #[arg(long, global = true)]

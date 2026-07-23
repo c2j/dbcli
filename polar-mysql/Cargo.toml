@@ -3,10 +3,10 @@ name = "polar-mysql"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "CLI and MCP server for MySQL/PolarDB-X database introspection"
+description = "CLI and MCP server for MySQL/PolarDB-X/Oracle database introspection"
 
 [[bin]]
-name = "polar-mysql"
+name = "hepta_dbcli"
 path = "src/main.rs"
 
 [features]

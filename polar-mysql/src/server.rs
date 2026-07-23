@@ -646,8 +646,8 @@ impl DbMcp {
 }
 
 #[tool_handler(
-    name = "polar-mysql",
+    name = "hepta_dbcli",
     version = "0.2.1",
-    instructions = "MCP server for MySQL/PolarDB-X database introspection with multi-connection support"
+    instructions = "MCP server for MySQL/PolarDB-X/Oracle database introspection with multi-connection support"
 )]
 impl ServerHandler for DbMcp {}

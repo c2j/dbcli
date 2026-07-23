@@ -17,7 +17,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  BINARY_NAME: polar-mysql
+  BINARY_NAME: hepta_dbcli
 
 jobs:
   build-linux:
@@ -47,7 +47,7 @@ jobs:
           zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
       - uses: actions/upload-artifact@v4
         with:
-          name: polar-mysql-linux-x86_64
+          name: hepta_dbcli-linux-x86_64
           path: "*.zip"
 
   build-linux-arm64:
@@ -68,7 +68,7 @@ jobs:
               curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
               . \$HOME/.cargo/env
               cargo build --release -p polar-mysql --features oracle
-              strip target/release/polar-mysql
+              strip target/release/hepta_dbcli
             "
       - name: Set version
         id: version
@@ -86,7 +86,7 @@ jobs:
           zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}"
       - uses: actions/upload-artifact@v4
         with:
-          name: polar-mysql-linux-arm64
+          name: hepta_dbcli-linux-arm64
           path: "*.zip"
 
   build-windows:
@@ -118,7 +118,7 @@ jobs:
           Compress-Archive -Path $ARTIFACT_NAME -DestinationPath "${ARTIFACT_NAME}.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: polar-mysql-windows-x86_64
+          name: hepta_dbcli-windows-x86_64
           path: "*.zip"
 
   release:
