@@ -105,21 +105,14 @@ fn is_read_only_query(sql: &str) -> bool {
         || upper.starts_with("WITH")
 }
 
-pub(crate) fn is_read_only_mcp(sql: &str) -> bool {
+pub(crate) fn is_read_only_mcp(sql: &str, prefixes: &[&str]) -> bool {
     let trimmed = sql.trim();
     let stripped = strip_leading_comments(trimmed);
     let upper = stripped.to_uppercase();
-    upper.starts_with("SELECT")
-        || upper.starts_with("EXPLAIN")
-        || upper.starts_with("SHOW")
-        || upper.starts_with("DESC")
-        || upper.starts_with("DESCRIBE")
+    prefixes.iter().any(|p| upper.starts_with(p))
 }
 
-pub(crate) async fn execute_query(
-    conn: &mut dyn DbConn,
-    sql: &str,
-) -> Result<QueryResult, String> {
+pub(crate) async fn execute_query(conn: &mut dyn DbConn, sql: &str) -> Result<QueryResult, String> {
     let trimmed = sql.trim();
     if trimmed.is_empty() {
         return Err("Empty SQL statement".to_string());
@@ -199,10 +192,7 @@ pub(crate) fn render_result(
     Ok(())
 }
 
-pub(crate) async fn run_cli(
-    args: CliArgs,
-    registry: &BackendRegistry,
-) -> Result<(), String> {
+pub(crate) async fn run_cli(args: CliArgs, registry: &BackendRegistry) -> Result<(), String> {
     let sql = if let Some(s) = &args.sql {
         s.clone()
     } else if let Some(f) = &args.file {
@@ -252,7 +242,11 @@ pub(crate) async fn run_cli(
     )
     .map_err(|e| format!("Invalid timeout configuration: {}", e))?;
 
-    let scheme = target.connection_url.find("://").map(|i| &target.connection_url[..i]).unwrap_or("mysql");
+    let scheme = target
+        .connection_url
+        .find("://")
+        .map(|i| &target.connection_url[..i])
+        .unwrap_or("mysql");
     let pool = registry
         .connect_with_fallback(scheme, &target.connection_url, Some(&effective_timeout))
         .await
@@ -342,35 +336,66 @@ mod tests {
 
     #[test]
     fn test_is_read_only_select() {
-        assert!(is_read_only_query("SELECT 1"));
-        assert!(is_read_only_query("select * from users"));
-        assert!(is_read_only_query("  SELECT 1"));
+        let mysql_prefixes = &["SELECT", "EXPLAIN", "SHOW", "DESC", "DESCRIBE"];
+        assert!(is_read_only_mcp("SELECT 1", mysql_prefixes));
+        assert!(is_read_only_mcp("select * from users", mysql_prefixes));
+        assert!(is_read_only_mcp("  SELECT 1", mysql_prefixes));
     }
 
     #[test]
     fn test_is_read_only_explain() {
-        assert!(is_read_only_query("EXPLAIN SELECT 1"));
-        assert!(is_read_only_query("explain select 1"));
+        let mysql_prefixes = &["SELECT", "EXPLAIN", "SHOW", "DESC", "DESCRIBE"];
+        assert!(is_read_only_mcp("EXPLAIN SELECT 1", mysql_prefixes));
+        assert!(is_read_only_mcp("explain select 1", mysql_prefixes));
     }
 
     #[test]
     fn test_is_read_only_show() {
-        assert!(is_read_only_query("SHOW TABLES"));
-        assert!(is_read_only_query("show databases"));
+        let mysql_prefixes = &["SELECT", "EXPLAIN", "SHOW", "DESC", "DESCRIBE"];
+        assert!(is_read_only_mcp("SHOW TABLES", mysql_prefixes));
+        assert!(is_read_only_mcp("show databases", mysql_prefixes));
     }
 
     #[test]
     fn test_is_read_only_describe() {
-        assert!(is_read_only_query("DESC users"));
-        assert!(is_read_only_query("DESCRIBE users"));
+        let mysql_prefixes = &["SELECT", "EXPLAIN", "SHOW", "DESC", "DESCRIBE"];
+        assert!(is_read_only_mcp("DESC users", mysql_prefixes));
+        assert!(is_read_only_mcp("DESCRIBE users", mysql_prefixes));
     }
 
     #[test]
     fn test_is_read_only_false() {
-        assert!(!is_read_only_query("INSERT INTO t VALUES (1)"));
-        assert!(!is_read_only_query("UPDATE t SET a=1"));
-        assert!(!is_read_only_query("DELETE FROM t"));
-        assert!(!is_read_only_query("DROP TABLE t"));
+        let mysql_prefixes = &["SELECT", "EXPLAIN", "SHOW", "DESC", "DESCRIBE"];
+        assert!(!is_read_only_mcp(
+            "INSERT INTO t VALUES (1)",
+            mysql_prefixes
+        ));
+        assert!(!is_read_only_mcp("UPDATE t SET a=1", mysql_prefixes));
+        assert!(!is_read_only_mcp("DELETE FROM t", mysql_prefixes));
+        assert!(!is_read_only_mcp("DROP TABLE t", mysql_prefixes));
+    }
+
+    #[test]
+    fn test_is_read_only_mcp_with_oracle_prefixes_allows_with() {
+        let oracle_prefixes = &["SELECT", "EXPLAIN", "WITH"];
+        assert!(is_read_only_mcp(
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            oracle_prefixes
+        ));
+    }
+
+    #[test]
+    fn test_is_read_only_mcp_with_mysql_prefixes_rejects_with() {
+        let mysql_prefixes = &["SELECT", "EXPLAIN", "SHOW", "DESC", "DESCRIBE"];
+        assert!(!is_read_only_mcp(
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            mysql_prefixes
+        ));
+    }
+
+    #[test]
+    fn test_is_read_only_mcp_empty_prefixes_rejects_all() {
+        assert!(!is_read_only_mcp("SELECT 1", &[]));
     }
 
     #[test]
@@ -400,10 +425,7 @@ mod tests {
     fn test_render_result_table() {
         let result = QueryResult {
             columns: vec!["a".into(), "b".into()],
-            rows: vec![vec![
-                Value::String("1".into()),
-                Value::String("2".into()),
-            ]],
+            rows: vec![vec![Value::String("1".into()), Value::String("2".into())]],
             row_count: 1,
         };
         let mut buf: Vec<u8> = Vec::new();
@@ -417,10 +439,7 @@ mod tests {
     fn test_render_result_csv() {
         let result = QueryResult {
             columns: vec!["a".into(), "b".into()],
-            rows: vec![vec![
-                Value::String("1".into()),
-                Value::String("2".into()),
-            ]],
+            rows: vec![vec![Value::String("1".into()), Value::String("2".into())]],
             row_count: 1,
         };
         let mut buf: Vec<u8> = Vec::new();

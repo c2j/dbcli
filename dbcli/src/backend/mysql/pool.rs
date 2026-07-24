@@ -41,9 +41,8 @@ pub(crate) fn create_mysql_pool(
     timeout_ms: Option<u64>,
 ) -> Result<Arc<dyn DbPool>, DbError> {
     let opts = mysql_async::OptsBuilder::from_opts(
-        mysql_async::Opts::from_url(url).map_err(|e| {
-            DbError::connection_with_source("Invalid MySQL URL", e)
-        })?,
+        mysql_async::Opts::from_url(url)
+            .map_err(|e| DbError::connection_with_source("Invalid MySQL URL", e))?,
     );
 
     let pool = mysql_async::Pool::new(opts);

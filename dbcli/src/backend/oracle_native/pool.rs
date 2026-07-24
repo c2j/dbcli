@@ -65,11 +65,7 @@ fn parse_oracle_url(url: &str) -> Result<(String, String, String), DbError> {
 
     let conn_str = format!("//{}/{}", host_port, service_name);
 
-    Ok((
-        conn_str,
-        percent_decode(user),
-        percent_decode(password),
-    ))
+    Ok((conn_str, percent_decode(user), percent_decode(password)))
 }
 
 fn percent_decode(s: &str) -> String {
@@ -79,10 +75,7 @@ fn percent_decode(s: &str) -> String {
         if b == b'%' {
             let hi = chars.next().unwrap_or(b'0');
             let lo = chars.next().unwrap_or(b'0');
-            if let Ok(decoded) = u8::from_str_radix(
-                &format!("{}{}", hi as char, lo as char),
-                16,
-            ) {
+            if let Ok(decoded) = u8::from_str_radix(&format!("{}{}", hi as char, lo as char), 16) {
                 result.push(decoded as char);
             } else {
                 result.push('%');
@@ -159,7 +152,10 @@ mod integration {
         };
         let pool = create_oracle_pool(&url, None).expect("create pool");
         let mut conn = pool.acquire().await.expect("acquire");
-        let result = conn.query("SELECT 'ok' AS status FROM dual").await.expect("query");
+        let result = conn
+            .query("SELECT 'ok' AS status FROM dual")
+            .await
+            .expect("query");
         assert_eq!(result.row_count, 1);
     }
 

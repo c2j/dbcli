@@ -27,8 +27,8 @@ fn result_set_to_query_result(
 
     let mut rows: Vec<Vec<Value>> = Vec::new();
     for row_result in result {
-        let row = row_result
-            .map_err(|e| DbError::query_with_source("Oracle row fetch failed", e))?;
+        let row =
+            row_result.map_err(|e| DbError::query_with_source("Oracle row fetch failed", e))?;
         let mut values = Vec::with_capacity(col_count);
         for i in 0..col_count {
             values.push(oracle_value_to_json(&row, i));

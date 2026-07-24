@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["polar-mysql"]
+members = ["dbcli"]
 
 [workspace.package]
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 license = "MIT OR Apache-2.0"

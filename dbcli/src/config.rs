@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::backend::{default_port_for_scheme, ssl_url_param_for_scheme};
+
 // ─── Constants ─────────────────────────────────────────────────────────
 
 pub(crate) const KEYRING_SERVICE: &str = "polar-mysql";
@@ -22,7 +24,7 @@ pub(crate) enum PasswordSource {
 // ─── Timeout Config ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-pub(crate) struct TimeoutConfig {
+pub struct TimeoutConfig {
     pub statement_timeout: Option<Duration>,
     pub connection_max_lifetime: Option<Duration>,
 }
@@ -367,7 +369,7 @@ fn build_db_url(
                 || mode.eq_ignore_ascii_case("1")
                 || mode.eq_ignore_ascii_case("yes") =>
         {
-            if scheme == "oracle" { "" } else { "?ssl-mode=REQUIRED" }
+            ssl_url_param_for_scheme(scheme)
         }
         _ => "",
     };
@@ -432,7 +434,7 @@ pub(crate) fn resolve_single_connection(
             .as_deref()
             .ok_or_else(|| format!("connection '{}' has no host or url", conn.name))?;
         let scheme = conn.driver.as_deref().unwrap_or("mysql");
-        let port = conn.port.unwrap_or(if scheme == "oracle" { 1521 } else { 3306 });
+        let port = conn.port.unwrap_or(default_port_for_scheme(scheme));
         let user = conn
             .user
             .as_deref()
@@ -470,11 +472,19 @@ pub(crate) fn resolve_single_connection(
             replace_password_in_url(u, &pw)
         } else {
             let host = conn.host.as_deref().unwrap();
-            let port = conn.port.unwrap_or(if driver_scheme == "oracle" { 1521 } else { 3306 });
+            let port = conn.port.unwrap_or(default_port_for_scheme(driver_scheme));
             let user = conn.user.as_deref().unwrap();
             let database = conn.database.as_deref();
             let sslmode = conn.sslmode.as_deref();
-            build_db_url(driver_scheme, host, port, user, Some(&pw), database, sslmode)
+            build_db_url(
+                driver_scheme,
+                host,
+                port,
+                user,
+                Some(&pw),
+                database,
+                sslmode,
+            )
         }
     } else if matches!(password_source, PasswordSource::EnvVar) {
         if let Some(ref u) = conn.url {
@@ -482,11 +492,19 @@ pub(crate) fn resolve_single_connection(
         } else {
             let pw = std::env::var("POLARDB_MYSQL_PASSWORD").unwrap_or_default();
             let host = conn.host.as_deref().unwrap();
-            let port = conn.port.unwrap_or(if driver_scheme == "oracle" { 1521 } else { 3306 });
+            let port = conn.port.unwrap_or(default_port_for_scheme(driver_scheme));
             let user = conn.user.as_deref().unwrap();
             let database = conn.database.as_deref();
             let sslmode = conn.sslmode.as_deref();
-            build_db_url(driver_scheme, host, port, user, Some(&pw), database, sslmode)
+            build_db_url(
+                driver_scheme,
+                host,
+                port,
+                user,
+                Some(&pw),
+                database,
+                sslmode,
+            )
         }
     } else {
         url
@@ -586,7 +604,7 @@ pub(crate) fn build_lazy_resolver(
             .as_deref()
             .ok_or_else(|| format!("connection '{}' has no host or url", name_clone))?;
         let scheme = driver.as_deref().unwrap_or("mysql");
-        let port = port.unwrap_or(if scheme == "oracle" { 1521 } else { 3306 });
+        let port = port.unwrap_or(default_port_for_scheme(scheme));
         let user = user
             .as_deref()
             .ok_or_else(|| format!("connection '{}' has no user or url", name_clone))?;

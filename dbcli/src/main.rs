@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use crate::backend::factory::BackendRegistry;
-use crate::backend::DbConn;
 use crate::backend::mysql::MySqlFactory;
+use crate::backend::DbConn;
 use crate::config::{
     default_config_path, read_config, resolve_all_connections_lazy, resolve_env_var_connection,
     resolve_single_connection, rewrite_password_to_sentinel, store_keyring_password,
@@ -343,11 +343,7 @@ async fn try_connect_tls_verify(
     Ok((conn, elapsed))
 }
 
-async fn do_oracle_check(
-    resolved: &ResolvedConnection,
-    registry: &BackendRegistry,
-    verbose: bool,
-) {
+async fn do_oracle_check(resolved: &ResolvedConnection, registry: &BackendRegistry, verbose: bool) {
     let base_url = &resolved.connection_url;
 
     eprintln!("Connection: {}", resolved.name);
@@ -356,7 +352,10 @@ async fn do_oracle_check(
 
     eprintln!("[1/1] Connecting to Oracle ...");
     let start = Instant::now();
-    match registry.connect_with_fallback("oracle", base_url, None).await {
+    match registry
+        .connect_with_fallback("oracle", base_url, None)
+        .await
+    {
         Ok(pool) => {
             let elapsed = start.elapsed();
             match pool.acquire().await {
@@ -428,7 +427,10 @@ fn print_password_status(resolved: &ResolvedConnection) {
                     if pw.is_empty() {
                         eprintln!("  WARNING: keyring returned empty password");
                     } else {
-                        eprintln!("  Keyring accessible, password retrieved ({} chars)", pw.len());
+                        eprintln!(
+                            "  Keyring accessible, password retrieved ({} chars)",
+                            pw.len()
+                        );
                     }
                 }
                 Err(e) => eprintln!("  Keyring read-back failed: {}", e),
@@ -473,15 +475,102 @@ fn migrate_password_if_needed(resolved: &ResolvedConnection) {
     }
 }
 
+#[cfg(feature = "gaussdb")]
+async fn do_gaussdb_check(
+    resolved: &ResolvedConnection,
+    registry: &BackendRegistry,
+    verbose: bool,
+) {
+    let base_url = &resolved.connection_url;
+
+    eprintln!("Connection: {}", resolved.name);
+    eprintln!();
+    print_password_status(resolved);
+
+    eprintln!("[1/1] Connecting to GaussDB ...");
+    let start = Instant::now();
+    match registry
+        .connect_with_fallback("gaussdb", base_url, None)
+        .await
+    {
+        Ok(pool) => {
+            let elapsed = start.elapsed();
+            match pool.acquire().await {
+                Ok(mut conn) => {
+                    let ver = {
+                        let sql = conn.dialect().database_info().to_string();
+                        conn.query(&sql).await.ok().and_then(|r| {
+                            r.rows.first().and_then(|row| {
+                                row.first().and_then(|v| v.as_str().map(|s| s.to_string()))
+                            })
+                        })
+                    };
+                    eprintln!(
+                        "  \u{2713} GaussDB  — {}ms  {}",
+                        elapsed.as_millis(),
+                        ver.as_deref().unwrap_or("(unknown)")
+                    );
+                    if verbose {
+                        if let Ok(result) =
+                            conn.query("SELECT version()::text, current_database()::text, current_user::text, inet_server_addr()::text, inet_server_port()::text")
+                                .await
+                        {
+                            if let Some(row) = result.rows.first() {
+                                eprintln!(
+                                    "  Version    : {}",
+                                    row[0].as_str().unwrap_or("(unknown)")
+                                );
+                                eprintln!(
+                                    "  Database   : {}",
+                                    row[1].as_str().unwrap_or("(unknown)")
+                                );
+                                eprintln!(
+                                    "  User       : {}",
+                                    row[2].as_str().unwrap_or("(unknown)")
+                                );
+                                eprintln!(
+                                    "  Server     : {}:{}",
+                                    row[3].as_str().unwrap_or("(unknown)"),
+                                    row[4]
+                                        .as_i64()
+                                        .map(|p| p.to_string())
+                                        .unwrap_or_else(|| "(unknown)".to_string())
+                                );
+                            }
+                        }
+                    }
+                    migrate_password_if_needed(resolved);
+                }
+                Err(e) => {
+                    eprintln!("  \u{2717} GaussDB  — FAILED to acquire: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("  \u{2717} GaussDB  — FAILED: {}", e);
+        }
+    }
+}
+
 async fn handle_check_connection(
     resolved: &ResolvedConnection,
     verbose: bool,
     registry: &BackendRegistry,
 ) {
-    let scheme = resolved.connection_url.find("://").map(|i| &resolved.connection_url[..i]).unwrap_or("mysql");
+    let scheme = resolved
+        .connection_url
+        .find("://")
+        .map(|i| &resolved.connection_url[..i])
+        .unwrap_or("mysql");
 
     if scheme == "oracle" {
         do_oracle_check(resolved, registry, verbose).await;
+        return;
+    }
+
+    #[cfg(feature = "gaussdb")]
+    if scheme == "gaussdb" {
+        do_gaussdb_check(resolved, registry, verbose).await;
         return;
     }
 
@@ -744,6 +833,8 @@ fn create_registry() -> BackendRegistry {
     registry.register(Arc::new(crate::backend::oracle::OracleFactory));
     #[cfg(feature = "oracle")]
     registry.register(Arc::new(crate::backend::oracle_native::OracleFactory));
+    #[cfg(feature = "gaussdb")]
+    registry.register(Arc::new(crate::backend::gaussdb::GaussdbFactory));
     registry
 }
 
@@ -787,12 +878,7 @@ async fn run_mcp_server(config_path: Option<String>, registry: Arc<BackendRegist
             })
             .chain(lazy_resolvers)
             .collect();
-        DbMcp::new_with_lazy(
-            Arc::clone(&registry),
-            Vec::new(),
-            all_lazy,
-            default_name,
-        )
+        DbMcp::new_with_lazy(Arc::clone(&registry), Vec::new(), all_lazy, default_name)
     } else {
         DbMcp::new_empty(Arc::clone(&registry), default_name)
     };

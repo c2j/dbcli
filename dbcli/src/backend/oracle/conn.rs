@@ -51,14 +51,18 @@ impl DbConn for OracleConn {
     }
 
     async fn exec(&mut self, sql: &str, params: &[Value]) -> Result<QueryResult, DbError> {
-        let string_params: Vec<String> = params.iter().map(|v| match v {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        }).collect();
+        let string_params: Vec<String> = params
+            .iter()
+            .map(|v| match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .collect();
 
-        let param_refs: Vec<oracle_rs::Value> = string_params.iter().map(|s| {
-            oracle_rs::Value::String(s.clone())
-        }).collect();
+        let param_refs: Vec<oracle_rs::Value> = string_params
+            .iter()
+            .map(|s| oracle_rs::Value::String(s.clone()))
+            .collect();
 
         let result = self
             .conn

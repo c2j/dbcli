@@ -1,17 +1,19 @@
 // ─── Database Backend Abstraction Layer ─────────────────────────────
 //
-// This module defines the trait interfaces that decouple the polar-mysql
+// This module defines the trait interfaces that decouple the hepta_dbcli
 // CLI + MCP server from any specific database driver. Each supported
-// database (MySQL, Oracle, etc.) implements these traits in its own
+// database (MySQL, Oracle, GaussDB, etc.) implements these traits in its own
 // submodule under backend/.
 
 pub mod error;
 pub mod factory;
-pub(crate) mod mysql;
+#[cfg(feature = "gaussdb")]
+pub mod gaussdb;
+pub mod mysql;
 #[cfg(feature = "oracle-rs")]
-pub(crate) mod oracle;
+pub mod oracle;
 #[cfg(feature = "oracle")]
-pub(crate) mod oracle_native;
+pub mod oracle_native;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -140,6 +142,11 @@ pub trait Dialect: Send + Sync {
 
     /// Whether this database supports # as a line-comment token (MySQL yes, Oracle no).
     fn supports_hash_comment(&self) -> bool;
+
+    /// Whether this database supports $...$ dollar-quoting (PostgreSQL/GaussDB yes, MySQL/Oracle no).
+    fn supports_dollar_quote(&self) -> bool {
+        false
+    }
 }
 
 // ─── BackendFactory — Creates Backends from Configuration ───────────
@@ -164,4 +171,67 @@ pub trait BackendFactory: Send + Sync {
         url: &str,
         timeout_config: Option<&TimeoutConfig>,
     ) -> Result<Arc<dyn DbPool>, DbError>;
+}
+
+// ─── Scheme-level Defaults (pre-connection lookups) ──────────────────
+
+/// Default TCP port for a database scheme. Used by config resolution
+/// before any BackendFactory is instantiated. Each backend's
+/// Dialect::default_port() MUST agree with this lookup.
+pub(crate) fn default_port_for_scheme(scheme: &str) -> u16 {
+    match scheme {
+        "oracle" => 1521,
+        "gaussdb" => 5432,
+        _ => 3306, // mysql and unknown
+    }
+}
+
+/// SSL URL query parameter for a database scheme. Each backend's
+/// driver must accept this format. Used by config URL building.
+pub(crate) fn ssl_url_param_for_scheme(scheme: &str) -> &'static str {
+    match scheme {
+        "oracle" => "",
+        "gaussdb" => "?sslmode=require",
+        _ => "?ssl-mode=REQUIRED", // mysql
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_port_mysql() {
+        assert_eq!(default_port_for_scheme("mysql"), 3306);
+    }
+
+    #[test]
+    fn test_default_port_oracle() {
+        assert_eq!(default_port_for_scheme("oracle"), 1521);
+    }
+
+    #[test]
+    fn test_default_port_gaussdb() {
+        assert_eq!(default_port_for_scheme("gaussdb"), 5432);
+    }
+
+    #[test]
+    fn test_default_port_unknown_fallsback() {
+        assert_eq!(default_port_for_scheme("unknown_db"), 3306);
+    }
+
+    #[test]
+    fn test_ssl_url_param_mysql() {
+        assert_eq!(ssl_url_param_for_scheme("mysql"), "?ssl-mode=REQUIRED");
+    }
+
+    #[test]
+    fn test_ssl_url_param_oracle() {
+        assert_eq!(ssl_url_param_for_scheme("oracle"), "");
+    }
+
+    #[test]
+    fn test_ssl_url_param_gaussdb() {
+        assert_eq!(ssl_url_param_for_scheme("gaussdb"), "?sslmode=require");
+    }
 }
