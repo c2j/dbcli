@@ -32,7 +32,29 @@ use crate::server::{format_error_chain, DbMcp};
 // ─── CLI Structure ─────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "hepta_dbcli", version, about = concat!("CLI and MCP server for MySQL/PolarDB-X/Oracle database introspection — v", env!("CARGO_PKG_VERSION")))]
+#[command(name = "hepta_dbcli", version, about = concat!("CLI and MCP server for MySQL/PolarDB-X/Oracle database introspection — v", env!("CARGO_PKG_VERSION")),
+    after_long_help = concat!(
+        "CONFIGURATION:\n",
+        "  Default config:  ~/.hepta-dbcli.toml (also reads legacy ~/.polardb-mysql.toml)\n",
+        "  Environment var: HEPTA_DBCLI_URL=mysql://user:pass@host:port/database\n",
+        "\n",
+        "  Example config:\n",
+        "    host = \"127.0.0.1\"\n",
+        "    port = 3306\n",
+        "    user = \"root\"\n",
+        "    password = \"secret\"      # auto-migrated to OS keychain\n",
+        "    database = \"mysql\"\n",
+        "\n",
+        "  Multi-connection (TOML sections):\n",
+        "    default_connection = \"dev\"\n",
+        "    [connections.dev]\n",
+        "    host = \"127.0.0.1\"\n",
+        "    user = \"root\"\n",
+        "    password = \"keyring\"\n",
+        "\n",
+        "  Password stored via: hepta_dbcli store-password [--name <connection>]\n",
+        "  Test connectivity:   hepta_dbcli check [--name <connection>] [--verbose]\n",
+    ))]
 struct Cli {
     /// Path to config file
     #[arg(long, global = true)]
@@ -214,7 +236,7 @@ fn handle_store_password(name: Option<String>, config_path: Option<String>) {
             })
     };
 
-    let keyring_user = target.keyring_username();
+    let keyring_user = target.keyring_username(Some(&config_path));
 
     if let Err(e) = store_keyring_password(&keyring_user, &password) {
         eprintln!("error: {}", e);
@@ -435,7 +457,10 @@ fn print_password_status(resolved: &ResolvedConnection) {
                         );
                     }
                 }
-                Err(e) => eprintln!("  Keyring read-back failed: {}", e),
+                Err(e) => eprintln!(
+                    "  Keyring read-back failed: {} (password may still be in old keyring entry -- migration pending)",
+                    e
+                ),
             }
             eprintln!();
         }

@@ -48,7 +48,7 @@ hepta_dbcli 0.2.5
 最简单的使用方式是通过环境变量连接数据库：
 
 ```bash
-export POLARDB_MYSQL_URL="mysql://root:password@127.0.0.1:3306/mysql"
+export HEPTA_DBCLI_URL="mysql://root:password@127.0.0.1:3306/mysql"
 ```
 
 然后直接执行 SQL：
@@ -71,13 +71,13 @@ $ hepta_dbcli cli --sql "SELECT VERSION() AS version, DATABASE() AS db, CURRENT_
 
 ### 3.1 配置文件位置
 
-- 默认路径：`~/.polardb-mysql.toml`
+- 默认路径：`~/.hepta-dbcli.toml`
 - 自定义路径：通过 `--config <PATH>` 指定
-- 环境变量：`POLARDB_MYSQL_URL`（优先级最高）
+- 环境变量：`HEPTA_DBCLI_URL`（优先级最高）
 
 ### 3.2 单连接配置
 
-创建 `~/.polardb-mysql.toml`：
+创建 `~/.hepta-dbcli.toml`：
 
 ```toml
 host = "127.0.0.1"
@@ -134,7 +134,7 @@ hepta_dbcli cli --name prod --sql "SELECT COUNT(*) FROM orders"
 适合临时使用或脚本场景：
 
 ```bash
-export POLARDB_MYSQL_URL="mysql://user:password@host:port/database"
+export HEPTA_DBCLI_URL="mysql://user:password@host:port/database"
 ```
 
 使用环境变量时，连接名固定为 `default`，不使用钥匙串。
@@ -518,7 +518,7 @@ Password stored in OS keychain for 'readonly/prod' (connection: 'prod').
 
 ### 7.3 密码读取优先级
 
-1. 环境变量 `POLARDB_MYSQL_PASSWORD`（配合 `POLARDB_MYSQL_URL`）
+1. 环境变量 `HEPTA_DBCLI_PASSWORD`（配合 `HEPTA_DBCLI_URL`）
 2. 配置文件明文密码（首次连接后自动迁移到钥匙串）
 3. 操作系统钥匙串（配置文件 `password = "keyring"`）
 
@@ -615,10 +615,10 @@ docker run -d --name polardb-x -p 8527:8527 -m 12GB \
   polardbx/polardb-x
 
 # 等待约 1 分钟容器启动后连接
-export POLARDB_MYSQL_URL="mysql://polardbx_root:123456@127.0.0.1:8527"
+export HEPTA_DBCLI_URL="mysql://polardbx_root:123456@127.0.0.1:8527"
 
 # 或使用配置文件
-cat > ~/.polardb-mysql.toml << 'EOF'
+cat > ~/.hepta-dbcli.toml << 'EOF'
 host = "127.0.0.1"
 port = 8527
 user = "polardbx_root"
@@ -649,7 +649,7 @@ fi
 
 | 错误信息 | 原因 | 解决方案 |
 |----------|------|----------|
-| `No connection configuration found` | 未找到配置文件或环境变量 | 创建 `~/.polardb-mysql.toml` 或设置 `POLARDB_MYSQL_URL` |
+| `No connection configuration found` | 未找到配置文件或环境变量 | 创建 `~/.hepta-dbcli.toml` 或设置 `HEPTA_DBCLI_URL` |
 | `Connection failed` | 数据库不可达或凭据错误 | 使用 `hepta_dbcli check --verbose` 诊断 |
 | `Connection 'xxx' not found` | 指定的连接名在配置中不存在 | 检查配置文件的 `[connections.xxx]` 段 |
 | `keyring password not found` | 钥匙串中无密码且配置文件未含明文密码 | 执行 `hepta_dbcli store-password` |

@@ -36,7 +36,7 @@ Three test suites under `dbcli/tests/`:
 
 ```bash
 # MySQL (requires Docker MySQL container)
-POLARDB_MYSQL_TEST_URL=mysql://mcp:testpass@127.0.0.1:3306/testdb \
+HEPTA_DBCLI_TEST_URL=mysql://mcp:testpass@127.0.0.1:3306/testdb \
   cargo test --features integration --test regress_mysql
 
 # Oracle (requires Docker Oracle container)

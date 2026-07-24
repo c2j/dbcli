@@ -1,5 +1,5 @@
 // MySQL regression test suite
-// Run: POLARDB_MYSQL_TEST_URL=mysql://mcp:testpass@127.0.0.1:3306/testdb cargo test --features integration --test regress_mysql
+// Run: HEPTA_DBCLI_TEST_URL=mysql://mcp:testpass@127.0.0.1:3306/testdb cargo test --features integration --test regress_mysql
 
 #[cfg(feature = "integration")]
 mod common;
@@ -13,7 +13,7 @@ mod tests {
     static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
     fn mysql_url() -> String {
-        std::env::var("POLARDB_MYSQL_TEST_URL")
+        std::env::var("HEPTA_DBCLI_TEST_URL")
             .unwrap_or_else(|_| "mysql://root:testpass@127.0.0.1:3306/testdb".to_string())
     }
 
