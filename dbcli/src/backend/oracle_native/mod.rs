@@ -13,7 +13,7 @@ use crate::config::TimeoutConfig;
 use self::dialect::OracleDialect;
 use self::pool::create_oracle_pool;
 
-pub(crate) struct OracleFactory;
+pub struct OracleFactory;
 
 #[async_trait]
 impl BackendFactory for OracleFactory {
