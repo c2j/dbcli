@@ -8,12 +8,12 @@
 pub mod error;
 pub mod factory;
 #[cfg(feature = "gaussdb")]
-pub mod gaussdb;
-pub mod mysql;
+pub(crate) mod gaussdb;
+pub(crate) mod mysql;
 #[cfg(feature = "oracle-rs")]
-pub mod oracle;
+pub(crate) mod oracle;
 #[cfg(feature = "oracle")]
-pub mod oracle_native;
+pub(crate) mod oracle_native;
 
 use async_trait::async_trait;
 use serde_json::Value;

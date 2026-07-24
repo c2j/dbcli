@@ -13,7 +13,7 @@ use crate::config::TimeoutConfig;
 
 use self::pool::create_gaussdb_pool;
 
-pub struct GaussdbFactory;
+pub(crate) struct GaussdbFactory;
 
 #[async_trait]
 impl BackendFactory for GaussdbFactory {

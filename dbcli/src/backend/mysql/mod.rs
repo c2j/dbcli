@@ -12,7 +12,7 @@ use crate::config::TimeoutConfig;
 
 use self::dialect::MySqlDialect;
 
-pub struct MySqlFactory;
+pub(crate) struct MySqlFactory;
 
 #[async_trait]
 impl BackendFactory for MySqlFactory {

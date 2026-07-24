@@ -160,11 +160,8 @@ impl DbMcp {
     ) -> Self {
         let mut connections = HashMap::new();
         for (name, url_opt) in entries {
-            match url_opt {
-                Some(url) => {
-                    connections.insert(name, ConnectionState::Connecting { url });
-                }
-                None => {}
+            if let Some(url) = url_opt {
+                connections.insert(name, ConnectionState::Connecting { url });
             }
         }
         Self {

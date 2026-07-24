@@ -44,7 +44,7 @@ impl SqlTokenizer {
         let mut in_id_quote = false;
         let mut in_line_comment = false;
         let mut in_block_comment_depth: u32 = 0;
-        let mut in_dollar_quote = false;
+        let _in_dollar_quote = false;
         let mut dollar_quote_tag: Option<String> = None;
 
         let chars: Vec<char> = input.chars().collect();

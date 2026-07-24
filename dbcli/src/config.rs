@@ -24,7 +24,7 @@ pub(crate) enum PasswordSource {
 // ─── Timeout Config ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-pub struct TimeoutConfig {
+pub(crate) struct TimeoutConfig {
     pub statement_timeout: Option<Duration>,
     pub connection_max_lifetime: Option<Duration>,
 }

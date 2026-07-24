@@ -12,7 +12,7 @@ use crate::config::TimeoutConfig;
 
 use self::dialect::OracleDialect;
 
-pub struct OracleFactory;
+pub(crate) struct OracleFactory;
 
 #[async_trait]
 impl BackendFactory for OracleFactory {

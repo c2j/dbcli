@@ -25,7 +25,7 @@ use crate::config::{
     resolve_single_connection, rewrite_password_to_sentinel, store_keyring_password,
     LazyConnectionEntry, PasswordSource, ResolvedConnection, KEYRING_SERVICE,
 };
-use crate::server::{format_error_chain, redact_url, DbMcp};
+use crate::server::{format_error_chain, DbMcp};
 
 // ─── CLI Structure ─────────────────────────────────────────────────────
 
