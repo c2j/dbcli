@@ -29,7 +29,7 @@ path = "tests/regress_gaussdb.rs"
 required-features = ["integration", "gaussdb"]
 
 [features]
-default = ["oracle-rs", "oracle"]
+default = ["oracle-rs", "oracle", "gaussdb"]
 integration = []
 oracle-rs = ["dep:oracle-rs"]
 oracle = ["dep:oracle"]
