@@ -112,8 +112,6 @@ impl Dialect for GaussdbDialect {
 
 #[cfg(all(test, feature = "integration"))]
 mod integration_tests {
-    use super::*;
-
     #[tokio::test]
     async fn gaussdb_connect_and_select_one() {
         let url = std::env::var("GAUSSDB_TEST_URL").unwrap_or_else(|_| {
