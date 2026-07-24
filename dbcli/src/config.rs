@@ -205,8 +205,8 @@ pub(crate) fn find_config_path(opt: Option<PathBuf>) -> Result<PathBuf, String> 
                     return Ok(p.clone());
                 }
             }
-            if let Some(old_path) = dirs::home_dir()
-                .map(|p| p.join(format!(".{}", OLD_DEFAULT_CONFIG_FILENAME)))
+            if let Some(old_path) =
+                dirs::home_dir().map(|p| p.join(format!(".{}", OLD_DEFAULT_CONFIG_FILENAME)))
             {
                 if old_path.exists() {
                     return Ok(old_path);
@@ -438,7 +438,10 @@ pub(crate) fn store_keyring_password(username: &str, password: &str) -> Result<(
         .map_err(|e| format!("failed to store password in keychain: {}", e))
 }
 
-pub(crate) fn read_keyring_password(new_username: &str, old_username: &str) -> Result<String, String> {
+pub(crate) fn read_keyring_password(
+    new_username: &str,
+    old_username: &str,
+) -> Result<String, String> {
     let new_result = try_read_keyring(KEYRING_SERVICE, new_username);
     if let Ok(pw) = new_result {
         return Ok(pw);
@@ -863,10 +866,7 @@ mod tests {
             statement_timeout: None,
             connection_max_lifetime: None,
         };
-        assert_eq!(
-            conn.keyring_username(None),
-            "dev#00001505"
-        );
+        assert_eq!(conn.keyring_username(None), "dev#00001505");
         assert_eq!(conn.old_keyring_username(), "root/dev");
     }
 

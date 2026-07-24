@@ -138,7 +138,6 @@ mod tests {
 #[cfg(all(feature = "oracle", feature = "integration", test))]
 mod integration {
     use super::*;
-    use crate::backend::DbPool;
 
     fn oracle_test_url() -> Option<String> {
         std::env::var("POLARDB_ORACLE_TEST_URL").ok()
