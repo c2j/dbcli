@@ -144,6 +144,37 @@ The `BackendRegistry` routes connections by URL scheme:
 ### Password Flow
 When a connection has `password = "keyring"` (sentinel value), the system reads from OS keychain. The migration rewrites the config file replacing the password with `"keyring"`. This is important: do NOT commit config files with plaintext passwords to git.
 
+**Keyring key structure**: The OS keychain stores passwords under two identifiers:
+- **Service**: `hepta-dbcli` (was `polar-mysql` in versions ≤ 0.2.7)
+- **Account**: `{connection_name}#{8_hex_chars}` — the hex suffix is a djb2 hash of the canonical config file path, which disambiguates identically-named connections across different config files
+
+On macOS, this appears in Keychain Access as `hepta-dbcli (dev#a3f9b2c1)`. On Linux, it's stored in the Secret Service.
+
+**Migration from old keyring**: When `read_keyring_password` fails to find an entry under the new service name (`hepta-dbcli`), it falls back to the old service name (`polar-mysql`) with the old account format (`{user}/{name}`). On success, it auto-migrates the password to the new key and logs a warning if migration fails. This ensures smooth upgrades from ≤ 0.2.7.
+
+### Naming Conventions
+
+The project was renamed from `polar-mysql` to `hepta_dbcli`. All new code must use the current names:
+
+| Category | Current | Legacy (≤ 0.2.7) |
+|----------|---------|-------------------|
+| Binary | `hepta_dbcli` | `polar-mysql` |
+| Config file | `~/.hepta-dbcli.toml` | `~/.polardb-mysql.toml` |
+| Env var (URL) | `HEPTA_DBCLI_URL` | `POLARDB_MYSQL_URL` |
+| Env var (password) | `HEPTA_DBCLI_PASSWORD` | `POLARDB_MYSQL_PASSWORD` |
+| Test env var | `HEPTA_DBCLI_TEST_URL` | `POLARDB_MYSQL_TEST_URL` |
+| Keyring service | `hepta-dbcli` | `polar-mysql` |
+| Keyring account | `{name}#{path_hash}` | `{user}/{name}` |
+| Logger dir | `~/.local/share/hepta-dbcli/` | — |
+| History dir | `~/.local/share/polar-mysql/history/` | — |
+
+**Backward compatibility rules**:
+- Config file: `~/.hepta-dbcli.toml` is tried first; `~/.polardb-mysql.toml` is tried as fallback
+- Keyring: new service+account tried first; old service+account as fallback with auto-migration
+- Oracle test env var `POLARDB_ORACLE_TEST_URL` has NOT been renamed (Oracle-specific, less widespread)
+- Package name in Cargo.toml remains `polar-mysql` (separate from binary name)
+- Crate name remains `polar_mysql` (Rust naming convention)
+
 ### Testing
 - Unit tests are **inline** (`#[cfg(test)] mod tests { ... }`) in each source file — there is no `/tests/` directory.
 - Integration tests live behind the `integration` feature flag in the same `#[cfg(test)]` blocks.
