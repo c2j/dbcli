@@ -19,7 +19,7 @@ fn value_at(row: &oracle_rs::Row, idx: usize) -> Value {
         return json!(v);
     }
     if let Some(s) = row.get_string(idx) {
-        if let Ok(json_val) = serde_json::from_str(&s) {
+        if let Ok(json_val) = serde_json::from_str(s) {
             return json_val;
         }
         return Value::String(s.to_string());

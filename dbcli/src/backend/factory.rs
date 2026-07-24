@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{BackendFactory, DbPool};
-use crate::backend::error::DbError;
 use crate::config::TimeoutConfig;
 
 #[derive(Default)]

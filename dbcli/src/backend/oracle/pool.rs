@@ -76,8 +76,8 @@ fn parse_oracle_url(url: &str) -> Result<oracle_rs::Config, DbError> {
         host,
         port,
         service_name,
-        &percent_decode(user),
-        &percent_decode(password),
+        percent_decode(user),
+        percent_decode(password),
     ))
 }
 
