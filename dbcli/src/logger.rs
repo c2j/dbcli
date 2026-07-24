@@ -5,7 +5,7 @@ use tracing_subscriber::EnvFilter;
 pub(crate) fn log_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("polar-mysql")
+        .join("hepta-dbcli")
 }
 
 pub(crate) fn init_logging() {

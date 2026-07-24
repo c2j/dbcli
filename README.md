@@ -1,11 +1,11 @@
 # hepta_dbcli
 
-CLI and MCP server for MySQL/PolarDB-X/Oracle database introspection.
+CLI and MCP server for MySQL/PolarDB-X/Oracle/GaussDB database introspection.
 
 ## Features
 
 - **MCP server** — spawn as a Model Context Protocol server for AI tools (Claude, Cursor, etc.) to query databases with read-only safety enforcement
-- **Multi-database** — supports MySQL, PolarDB-X, and Oracle (single binary with `--features oracle`)
+- **Multi-database** — supports MySQL, PolarDB-X, Oracle, and GaussDB (features: `oracle`, `gaussdb`)
 - **One-shot CLI** — execute SQL from command line, file, or stdin with multiple output formats
 - **Interactive REPL** — database-aware SQL prompt with multi-line editing, history, and dot commands
 - **Multi-connection** — manage multiple database connections with per-connection timeout config
@@ -184,7 +184,7 @@ cargo build
 cargo build --features oracle
 
 # Release (includes Oracle)
-cargo build --release -p polar-mysql --features oracle
+cargo build --release -p polar-mysql --features "oracle,gaussdb"
 
 # Format check
 cargo fmt --all -- --check

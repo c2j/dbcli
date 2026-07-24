@@ -1,5 +1,6 @@
-# Combined MySQL + Oracle config for multi-backend testing
-# Usage: hepta_dbcli --config tests/docker-all.toml cli --sql "SELECT * FROM dual" --name oracle
+# Combined MySQL + Oracle + GaussDB config for multi-backend regression testing
+# Usage:
+#   cargo run --features "oracle,gaussdb" -- --config tests/docker-all.toml cli --sql "..." --name gaussdb
 
 default_connection = "mysql"
 
@@ -17,3 +18,12 @@ port = 1521
 user = "system"
 password = "testpass"
 database = "FREEPDB1"
+
+[connections.gaussdb]
+driver = "gaussdb"
+host = "127.0.0.1"
+port = 5432
+user = "gaussdb"
+password = "testpass@123"
+database = "testdb"
+sslmode = "disable"

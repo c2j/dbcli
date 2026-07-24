@@ -139,9 +139,7 @@ struct ActiveConnection {
 
 enum ConnectionState {
     Pending(ResolveFn),
-    Connecting {
-        url: String,
-    },
+    Connecting { url: String },
     Connected(ActiveConnection),
     Unavailable(String),
 }
@@ -254,10 +252,7 @@ impl DbMcp {
                     return match pool.acquire().await {
                         Ok(conn) => Ok((pool, conn)),
                         Err(e) => {
-                            error!(
-                                "failed to get connection from pool for '{}': {}",
-                                name, e
-                            );
+                            error!("failed to get connection from pool for '{}': {}", name, e);
                             Err(connection_error(&url, &e.to_string()))
                         }
                     };
@@ -284,9 +279,7 @@ impl DbMcp {
                     (url, true)
                 }
                 Some(ConnectionState::Connecting { url })
-                | Some(ConnectionState::Unavailable(url)) => {
-                    (url.clone(), true)
-                }
+                | Some(ConnectionState::Unavailable(url)) => (url.clone(), true),
                 None => {
                     let available: Vec<&String> = conns.keys().collect();
                     return Err(McpError::invalid_request(
@@ -362,9 +355,10 @@ impl DbMcp {
             .await?;
 
         let sql = { conn.dialect().database_info().to_string() };
-        let result = conn.query(&sql).await.map_err(|e| {
-            query_error("get_database_info", &sql, &e.to_string())
-        })?;
+        let result = conn
+            .query(&sql)
+            .await
+            .map_err(|e| query_error("get_database_info", &sql, &e.to_string()))?;
 
         if result.rows.is_empty() {
             return Err(McpError::internal_error(
@@ -386,7 +380,9 @@ impl DbMcp {
             "version_comment": col_str(row, 8),
         });
 
-        Ok(CallToolResult::success(vec![Content::text(output.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            output.to_string(),
+        )]))
     }
 
     #[tool(description = "List all user tables and views in the database")]
@@ -403,9 +399,10 @@ impl DbMcp {
             .await?;
 
         let sql = { conn.dialect().list_tables().to_string() };
-        let result = conn.query(&sql).await.map_err(|e| {
-            query_error("list_tables", &sql, &e.to_string())
-        })?;
+        let result = conn
+            .query(&sql)
+            .await
+            .map_err(|e| query_error("list_tables", &sql, &e.to_string()))?;
 
         let tables: Vec<serde_json::Value> = result
             .rows
@@ -447,7 +444,13 @@ impl DbMcp {
 
         let sql = { conn.dialect().table_columns().to_string() };
         let col_result = conn
-            .exec(&sql, &[Value::String(schema.to_string()), Value::String(table.clone())])
+            .exec(
+                &sql,
+                &[
+                    Value::String(schema.to_string()),
+                    Value::String(table.clone()),
+                ],
+            )
             .await
             .map_err(|e| query_error("get_table_metadata (columns)", &sql, &e.to_string()))?;
 
@@ -469,7 +472,13 @@ impl DbMcp {
 
         let idx_sql = { conn.dialect().table_indexes().to_string() };
         let idx_result = conn
-            .exec(&idx_sql, &[Value::String(schema.to_string()), Value::String(table.clone())])
+            .exec(
+                &idx_sql,
+                &[
+                    Value::String(schema.to_string()),
+                    Value::String(table.clone()),
+                ],
+            )
             .await
             .map_err(|e| query_error("get_table_metadata (indexes)", &idx_sql, &e.to_string()))?;
 
@@ -488,7 +497,9 @@ impl DbMcp {
             .collect();
 
         let result = json!({ "columns": columns, "indexes": indexes });
-        Ok(CallToolResult::success(vec![Content::text(result.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            result.to_string(),
+        )]))
     }
 
     #[tool(description = "Execute a read-only SQL query (SELECT or EXPLAIN only)")]
@@ -507,7 +518,8 @@ impl DbMcp {
             .get_connection(params.connection_name.as_deref())
             .await?;
 
-        if !crate::cli::is_read_only_mcp(trimmed) {
+        let read_only_prefixes = conn.dialect().read_only_prefixes();
+        if !crate::cli::is_read_only_mcp(trimmed, read_only_prefixes) {
             error!(
                 "execute_query rejected non-SELECT query: {:?}",
                 &trimmed[..trimmed.len().min(80)]
@@ -515,7 +527,10 @@ impl DbMcp {
             return Err(McpError::invalid_request(
                 "invalid_query",
                 Some(json!({
-                    "message": "Only SELECT, EXPLAIN, SHOW, and DESCRIBE queries are allowed"
+                    "message": format!(
+                        "Only {} queries are allowed",
+                        read_only_prefixes.join(", ")
+                    )
                 })),
             ));
         }
@@ -529,9 +544,10 @@ impl DbMcp {
         let max_rows = params.max_rows.unwrap_or(1000).clamp(1, 10000);
         let sql_to_execute = conn.dialect().add_limit(trimmed, max_rows);
 
-        let result = conn.query(&sql_to_execute).await.map_err(|e| {
-            query_error("execute_query", trimmed, &e.to_string())
-        })?;
+        let result = conn
+            .query(&sql_to_execute)
+            .await
+            .map_err(|e| query_error("execute_query", trimmed, &e.to_string()))?;
 
         if result.rows.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
@@ -559,7 +575,9 @@ impl DbMcp {
             ));
         }
 
-        Ok(CallToolResult::success(vec![Content::text(output.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            output.to_string(),
+        )]))
     }
 
     #[tool(description = "Get the execution plan for a SQL query")]
@@ -587,9 +605,10 @@ impl DbMcp {
         let fmt = params.format.as_deref().unwrap_or("TEXT");
         let explain_sql = conn.dialect().build_explain(&params.sql, analyze, fmt);
 
-        let result = conn.query(&explain_sql).await.map_err(|e| {
-            query_error("get_execution_plan", &explain_sql, &e.to_string())
-        })?;
+        let result = conn
+            .query(&explain_sql)
+            .await
+            .map_err(|e| query_error("get_execution_plan", &explain_sql, &e.to_string()))?;
 
         let plan: String = result
             .rows
@@ -603,7 +622,9 @@ impl DbMcp {
             .join("\n");
 
         let output = json!({ "plan": plan });
-        Ok(CallToolResult::success(vec![Content::text(output.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            output.to_string(),
+        )]))
     }
 
     #[tool(description = "List all configured database connections")]
@@ -632,13 +653,15 @@ impl DbMcp {
             "default_connection": self.default_name,
         });
 
-        Ok(CallToolResult::success(vec![Content::text(result.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            result.to_string(),
+        )]))
     }
 }
 
 #[tool_handler(
     name = "hepta_dbcli",
     version = "0.2.3",
-    instructions = "MCP server for MySQL/PolarDB-X/Oracle database introspection with multi-connection support"
+    instructions = "MCP server for MySQL/PolarDB-X/Oracle/GaussDB database introspection with multi-connection support"
 )]
 impl ServerHandler for DbMcp {}

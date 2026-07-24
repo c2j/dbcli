@@ -1,4 +1,4 @@
-# polar-mysql 用户指南
+# hepta_dbcli 用户指南
 
 ## 目录
 
@@ -21,9 +21,9 @@
 
 从 [GitHub Releases](https://github.com/YOUR_ORG/dbcli/releases) 下载对应平台的预编译二进制：
 
-- `polar-mysql-{version}-x86_64-unknown-linux-gnu.zip`
-- `polar-mysql-{version}-aarch64-unknown-linux-gnu.zip`
-- `polar-mysql-{version}-x86_64-pc-windows-msvc.zip`
+- `hepta_dbcli-{version}-x86_64-unknown-linux-gnu.zip`
+- `hepta_dbcli-{version}-aarch64-unknown-linux-gnu.zip`
+- `hepta_dbcli-{version}-x86_64-pc-windows-msvc.zip`
 
 ### 源码编译
 
@@ -31,14 +31,14 @@
 git clone https://github.com/YOUR_ORG/dbcli.git
 cd dbcli
 cargo build --release -p polar-mysql
-# 二进制位于: target/release/polar-mysql
+# 二进制位于: target/release/hepta_dbcli
 ```
 
 验证安装：
 
 ```bash
-$ polar-mysql --version
-polar-mysql 0.1.0
+$ hepta_dbcli --version
+hepta_dbcli 0.2.5
 ```
 
 ---
@@ -54,7 +54,7 @@ export POLARDB_MYSQL_URL="mysql://root:password@127.0.0.1:3306/mysql"
 然后直接执行 SQL：
 
 ```bash
-$ polar-mysql cli --sql "SELECT VERSION() AS version, DATABASE() AS db, CURRENT_USER() AS user"
+$ hepta_dbcli cli --sql "SELECT VERSION() AS version, DATABASE() AS db, CURRENT_USER() AS user"
 ┌─────────┬───────┬────────────────┐
 │ version │ db    │ user           │
 ├─────────┼───────┼────────────────┤
@@ -126,7 +126,7 @@ connection_max_lifetime = "30min"
 使用 `--name` 选择连接：
 
 ```bash
-polar-mysql cli --name prod --sql "SELECT COUNT(*) FROM orders"
+hepta_dbcli cli --name prod --sql "SELECT COUNT(*) FROM orders"
 ```
 
 ### 3.4 环境变量模式
@@ -164,7 +164,7 @@ connection_max_lifetime = "30min"
 也可通过命令行参数覆盖（仅 CLI 模式）：
 
 ```bash
-polar-mysql cli --statement-timeout "5min" --connection-max-lifetime "10min" --sql "..."
+hepta_dbcli cli --statement-timeout "5min" --connection-max-lifetime "10min" --sql "..."
 ```
 
 ### 3.6 SSL/TLS 连接
@@ -192,11 +192,11 @@ sslmode = "require"
 ### 4.1 基本用法
 
 ```bash
-polar-mysql cli --sql "<SQL语句>"
+hepta_dbcli cli --sql "<SQL语句>"
 ```
 
 ```bash
-$ polar-mysql cli --sql "SELECT 1 AS one, 2 AS two"
+$ hepta_dbcli cli --sql "SELECT 1 AS one, 2 AS two"
 ┌─────┬─────┐
 │ one │ two │
 ├─────┼─────┤
@@ -209,7 +209,7 @@ $ polar-mysql cli --sql "SELECT 1 AS one, 2 AS two"
 
 ```bash
 $ echo "SELECT name, email FROM users ORDER BY id" > query.sql
-$ polar-mysql cli --file query.sql
+$ hepta_dbcli cli --file query.sql
 ┌─────────┬────────────────────┐
 │ name    │ email              │
 ├─────────┼────────────────────┤
@@ -224,7 +224,7 @@ $ polar-mysql cli --file query.sql
 ### 4.3 从标准输入读取 SQL
 
 ```bash
-$ echo "SELECT COUNT(*) AS total_users FROM users" | polar-mysql cli
+$ echo "SELECT COUNT(*) AS total_users FROM users" | hepta_dbcli cli
 ┌─────────────┐
 │ total_users │
 ├─────────────┤
@@ -240,7 +240,7 @@ $ echo "SELECT COUNT(*) AS total_users FROM users" | polar-mysql cli
 #### Table（默认）
 
 ```bash
-$ polar-mysql cli --sql "SELECT id, name, email FROM users LIMIT 2" --format table
+$ hepta_dbcli cli --sql "SELECT id, name, email FROM users LIMIT 2" --format table
 ┌────┬───────┬───────────────────┐
 │ id │ name  │ email             │
 ├────┼───────┼───────────────────┤
@@ -253,7 +253,7 @@ $ polar-mysql cli --sql "SELECT id, name, email FROM users LIMIT 2" --format tab
 #### JSON
 
 ```bash
-$ polar-mysql cli --sql "SELECT id, name, email FROM users LIMIT 2" --format json
+$ hepta_dbcli cli --sql "SELECT id, name, email FROM users LIMIT 2" --format json
 {
   "columns": [
     "id",
@@ -279,7 +279,7 @@ $ polar-mysql cli --sql "SELECT id, name, email FROM users LIMIT 2" --format jso
 #### CSV
 
 ```bash
-$ polar-mysql cli --sql "SELECT id, name, email FROM users LIMIT 2" --format csv
+$ hepta_dbcli cli --sql "SELECT id, name, email FROM users LIMIT 2" --format csv
 id,name,email
 1,Alice,alice@example.com
 2,Bob,bob@example.com
@@ -288,7 +288,7 @@ id,name,email
 #### Vertical（垂直展示）
 
 ```bash
-$ polar-mysql cli --sql "SELECT id, name, email FROM users LIMIT 1" --format vertical
+$ hepta_dbcli cli --sql "SELECT id, name, email FROM users LIMIT 1" --format vertical
 -[ RECORD 1 ]-
 id | 1
 name | Alice
@@ -299,10 +299,10 @@ email | alice@example.com
 ### 4.5 完整的命令行参数
 
 ```bash
-$ polar-mysql cli --help
+$ hepta_dbcli cli --help
 Execute SQL from command line
 
-Usage: polar-mysql cli [OPTIONS]
+Usage: hepta_dbcli cli [OPTIONS]
 
 Options:
       --config <CONFIG>
@@ -341,8 +341,8 @@ Options:
 ### 5.1 启动
 
 ```bash
-$ polar-mysql cli --interactive
-polar-mysql interactive -- connected to 'default'
+$ hepta_dbcli cli --interactive
+hepta_dbcli interactive -- connected to 'default'
 end SQL with ';' + Enter to execute (multi-line ok) .help .connect .exit
 $ 
 ```
@@ -350,9 +350,9 @@ $
 也可以指定连接：
 
 ```bash
-polar-mysql cli --interactive --name prod
+hepta_dbcli cli --interactive --name prod
 # 或简写
-polar-mysql cli -i --name prod
+hepta_dbcli cli -i --name prod
 ```
 
 ### 5.2 基本操作
@@ -408,10 +408,10 @@ saved 4 row(s) to /tmp/users.csv (csv)
 
 ```bash
 # 禁用历史记录（不读写历史文件）
-polar-mysql cli --interactive --no-history
+hepta_dbcli cli --interactive --no-history
 
 # 指定超时断开行为
-polar-mysql cli --interactive --timeout-action disconnect
+hepta_dbcli cli --interactive --timeout-action disconnect
 ```
 
 - `--no-history`：不保存也不读取 SQL 历史记录
@@ -425,7 +425,7 @@ polar-mysql cli --interactive --timeout-action disconnect
 ### 6.1 基本检查
 
 ```bash
-$ polar-mysql check
+$ hepta_dbcli check
 Connection: default
 
 [Keyring] Password read from OS keychain (user: mcp/default)
@@ -450,7 +450,7 @@ Connection: default
 ### 6.2 详细检查
 
 ```bash
-$ polar-mysql check --verbose
+$ hepta_dbcli check --verbose
 Connection: default
 
 [Keyring] Password from config file (plaintext)
@@ -473,11 +473,11 @@ Connection: default
 ### 6.3 通过 CLI 子命令检查
 
 ```bash
-polar-mysql cli --check-connection
-polar-mysql cli --check-connection --verbose
+hepta_dbcli cli --check-connection
+hepta_dbcli cli --check-connection --verbose
 ```
 
-效果等价于 `polar-mysql check`。
+效果等价于 `hepta_dbcli check`。
 
 ---
 
@@ -486,7 +486,7 @@ polar-mysql cli --check-connection --verbose
 ### 7.1 手动存储密码
 
 ```bash
-$ polar-mysql store-password
+$ hepta_dbcli store-password
 Enter password: 
 Confirm password: 
 Password stored in OS keychain for 'root/default' (connection: 'default').
@@ -494,7 +494,7 @@ Password stored in OS keychain for 'root/default' (connection: 'default').
 
 ```bash
 # 为指定连接存储密码
-$ polar-mysql store-password --name prod
+$ hepta_dbcli store-password --name prod
 Enter password: 
 Confirm password: 
 Password stored in OS keychain for 'readonly/prod' (connection: 'prod').
@@ -532,13 +532,13 @@ Password stored in OS keychain for 'readonly/prod' (connection: 'prod').
 
 ```bash
 # 默认模式
-polar-mysql
+hepta_dbcli
 
 # 显式指定
-polar-mysql mcp
+hepta_dbcli mcp
 
 # 指定配置文件
-polar-mysql --config /path/to/config.toml
+hepta_dbcli --config /path/to/config.toml
 ```
 
 MCP 服务器通过 **stdio** 协议与 MCP 客户端（如 Claude Desktop、Cursor）通信。
@@ -567,8 +567,8 @@ MCP 服务器通过 **stdio** 协议与 MCP 客户端（如 Claude Desktop、Cur
 ```json
 {
   "mcpServers": {
-    "polar-mysql": {
-      "command": "/usr/local/bin/polar-mysql",
+    "hepta_dbcli": {
+      "command": "/usr/local/bin/hepta_dbcli",
       "args": ["--config", "/home/user/.polardb-mysql.toml"]
     }
   }
@@ -583,31 +583,31 @@ MCP 服务器通过 **stdio** 协议与 MCP 客户端（如 Claude Desktop、Cur
 
 ```bash
 # CLI 模式切换连接
-polar-mysql cli --name dev --sql "SELECT * FROM users"
-polar-mysql cli --name prod --sql "SHOW PROCESSLIST"
+hepta_dbcli cli --name dev --sql "SELECT * FROM users"
+hepta_dbcli cli --name prod --sql "SHOW PROCESSLIST"
 
 # REPL 模式内切换
-polar-mysql cli --interactive
+hepta_dbcli cli --interactive
 $ .connect prod
-polar-mysql interactive -- connected to 'prod'
+hepta_dbcli interactive -- connected to 'prod'
 ```
 
 ### 9.2 超时控制
 
 ```bash
 # 设置单条 SQL 最大 5 分钟
-polar-mysql cli --statement-timeout 5min --sql "SELECT SLEEP(10)"
+hepta_dbcli cli --statement-timeout 5min --sql "SELECT SLEEP(10)"
 
 # 设置连接 10 分钟后自动回收
-polar-mysql cli --connection-max-lifetime 10min --sql "..."
+hepta_dbcli cli --connection-max-lifetime 10min --sql "..."
 
 # 超时后断开连接（而非保持）
-polar-mysql cli --timeout-action disconnect --sql "..."
+hepta_dbcli cli --timeout-action disconnect --sql "..."
 ```
 
 ### 9.3 使用 PolarDB-X
 
-polar-mysql 完全兼容 PolarDB-X（基于 MySQL 协议）：
+hepta_dbcli 完全兼容 PolarDB-X（基于 MySQL 协议）：
 
 ```bash
 # 使用 PolarDB-X Docker 镜像快速体验
@@ -625,7 +625,7 @@ user = "polardbx_root"
 password = "123456"
 EOF
 
-polar-mysql cli --sql "SELECT VERSION()"
+hepta_dbcli cli --sql "SELECT VERSION()"
 ```
 
 > **注意**：PolarDB-X 默认端口为 `8527`（非 3306），默认用户 `polardbx_root`。
@@ -635,7 +635,7 @@ polar-mysql cli --sql "SELECT VERSION()"
 ```bash
 #!/bin/bash
 # 查询用户数并判断
-COUNT=$(polar-mysql cli --format json --sql "SELECT COUNT(*) AS c FROM users" | jq -r '.rows[0][0]')
+COUNT=$(hepta_dbcli cli --format json --sql "SELECT COUNT(*) AS c FROM users" | jq -r '.rows[0][0]')
 if [ "$COUNT" -gt 100 ]; then
     echo "用户数超过 100: $COUNT"
 fi
@@ -650,27 +650,27 @@ fi
 | 错误信息 | 原因 | 解决方案 |
 |----------|------|----------|
 | `No connection configuration found` | 未找到配置文件或环境变量 | 创建 `~/.polardb-mysql.toml` 或设置 `POLARDB_MYSQL_URL` |
-| `Connection failed` | 数据库不可达或凭据错误 | 使用 `polar-mysql check --verbose` 诊断 |
+| `Connection failed` | 数据库不可达或凭据错误 | 使用 `hepta_dbcli check --verbose` 诊断 |
 | `Connection 'xxx' not found` | 指定的连接名在配置中不存在 | 检查配置文件的 `[connections.xxx]` 段 |
-| `keyring password not found` | 钥匙串中无密码且配置文件未含明文密码 | 执行 `polar-mysql store-password` |
-| `Only SELECT, EXPLAIN, SHOW, and DESCRIBE queries are allowed` | MCP 模式仅允许只读查询 | 使用 CLI 模式（`polar-mysql cli`）执行写操作 |
+| `keyring password not found` | 钥匙串中无密码且配置文件未含明文密码 | 执行 `hepta_dbcli store-password` |
+| `Only SELECT, EXPLAIN, SHOW, and DESCRIBE queries are allowed` | MCP 模式仅允许只读查询 | 使用 CLI 模式（`hepta_dbcli cli`）执行写操作 |
 | `No SQL provided` | 未提供 SQL 且 stdin 为空 | 使用 `-s`、`-f` 参数或管道传入 SQL |
 
 ### 10.2 诊断流程
 
 ```bash
 # 1. 检查配置文件是否能正确解析
-polar-mysql check --config /path/to/config.toml
+hepta_dbcli check --config /path/to/config.toml
 
 # 2. 详细连接诊断
-polar-mysql check --verbose
+hepta_dbcli check --verbose
 
 # 3. 检查钥匙串状态
-# macOS: 打开"钥匙串访问"，搜索 "polar-mysql"
-# Linux: secret-tool search service polar-mysql
+# macOS: 打开"钥匙串访问"，搜索 "hepta_dbcli"
+# Linux: secret-tool search service hepta_dbcli
 
 # 4. 查看日志
-cat ~/.local/share/polar-mysql/polar-mysql.log
+cat ~/.local/share/hepta-dbcli/hepta-dbcli.log
 ```
 
 ### 10.3 TLS 证书问题
@@ -687,33 +687,33 @@ cat ~/.local/share/polar-mysql/polar-mysql.log
 
 ```bash
 # 帮助
-polar-mysql --help
-polar-mysql cli --help
+hepta_dbcli --help
+hepta_dbcli cli --help
 
 # 连接检查
-polar-mysql check
-polar-mysql check --verbose
-polar-mysql check --name prod
+hepta_dbcli check
+hepta_dbcli check --verbose
+hepta_dbcli check --name prod
 
 # CLI 执行
-polar-mysql cli --sql "SELECT 1"
-polar-mysql cli --file query.sql
-echo "SELECT 1" | polar-mysql cli
-polar-mysql cli --sql "SELECT 1" --format json
+hepta_dbcli cli --sql "SELECT 1"
+hepta_dbcli cli --file query.sql
+echo "SELECT 1" | hepta_dbcli cli
+hepta_dbcli cli --sql "SELECT 1" --format json
 
 # REPL
-polar-mysql cli --interactive
-polar-mysql cli -i --name dev
+hepta_dbcli cli --interactive
+hepta_dbcli cli -i --name dev
 
 # 密码管理
-polar-mysql store-password
-polar-mysql store-password --name prod
+hepta_dbcli store-password
+hepta_dbcli store-password --name prod
 
 # MCP 服务器
-polar-mysql
-polar-mysql --config /path/to/config.toml
+hepta_dbcli
+hepta_dbcli --config /path/to/config.toml
 
 # 多连接
-polar-mysql cli --name prod --sql "..."
-polar-mysql cli --config /path/to/config.toml --name dev --sql "..."
+hepta_dbcli cli --name prod --sql "..."
+hepta_dbcli cli --config /path/to/config.toml --name dev --sql "..."
 ```

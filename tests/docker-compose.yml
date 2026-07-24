@@ -1,4 +1,8 @@
-# Integration test environment — MySQL 8 + Oracle 23 Free
+# Integration test environment — MySQL 8 + Oracle 23 Free + GaussDB 5
+#
+# Usage:
+#   docker compose -f tests/docker-compose.yml up -d [mysql|oracle|gaussdb]
+#   docker compose -f tests/docker-compose.yml down -v
 
 services:
   mysql:
@@ -28,3 +32,18 @@ services:
       timeout: 10s
       retries: 30
       start_period: 30s
+
+  gaussdb:
+    image: enmotech/opengauss:5.0.0-latest
+    container_name: hepta-gaussdb-test
+    environment:
+      GS_PASSWORD: testpass@123
+      GS_DB: testdb
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "gsql", "-d", "testdb", "-c", "SELECT 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s

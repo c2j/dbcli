@@ -6,14 +6,14 @@ pub(crate) mod types;
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use crate::backend::{BackendFactory, DbPool, Dialect};
 use crate::backend::error::DbError;
+use crate::backend::{BackendFactory, DbPool, Dialect};
 use crate::config::TimeoutConfig;
 
 use self::dialect::OracleDialect;
 use self::pool::create_oracle_pool;
 
-pub(crate) struct OracleFactory;
+pub struct OracleFactory;
 
 #[async_trait]
 impl BackendFactory for OracleFactory {

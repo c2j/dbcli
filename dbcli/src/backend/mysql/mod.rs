@@ -6,13 +6,13 @@ pub(crate) mod types;
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use crate::backend::{BackendFactory, DbPool, Dialect};
 use crate::backend::error::DbError;
+use crate::backend::{BackendFactory, DbPool, Dialect};
 use crate::config::TimeoutConfig;
 
 use self::dialect::MySqlDialect;
 
-pub(crate) struct MySqlFactory;
+pub struct MySqlFactory;
 
 #[async_trait]
 impl BackendFactory for MySqlFactory {
@@ -43,10 +43,9 @@ impl BackendFactory for MySqlFactory {
             let mut conn = pool.acquire().await.map_err(|e| {
                 DbError::connection(format!("MySQL connection probe failed: {}", e))
             })?;
-            let _ = conn
-                .query("SELECT 1")
-                .await
-                .map_err(|e| DbError::connection(format!("MySQL connection probe query failed: {}", e)))?;
+            let _ = conn.query("SELECT 1").await.map_err(|e| {
+                DbError::connection(format!("MySQL connection probe query failed: {}", e))
+            })?;
         }
 
         Ok(pool)

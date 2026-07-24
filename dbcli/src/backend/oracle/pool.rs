@@ -88,10 +88,7 @@ fn percent_decode(s: &str) -> String {
         if b == b'%' {
             let hi = chars.next().unwrap_or(b'0');
             let lo = chars.next().unwrap_or(b'0');
-            if let Ok(decoded) = u8::from_str_radix(
-                &format!("{}{}", hi as char, lo as char),
-                16,
-            ) {
+            if let Ok(decoded) = u8::from_str_radix(&format!("{}{}", hi as char, lo as char), 16) {
                 result.push(decoded as char);
             } else {
                 result.push('%');

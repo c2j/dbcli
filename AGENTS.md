@@ -1,6 +1,6 @@
 # AGENTS.md — hepta_dbcli (dbcli)
 
-Rust workspace. Single binary crate `hepta_dbcli` (package `polar-mysql`): a CLI + MCP server for MySQL/PolarDB-X/Oracle database introspection.
+Rust workspace. Single binary crate `hepta_dbcli` (package `polar-mysql`): a CLI + MCP server for MySQL/PolarDB-X/Oracle/GaussDB database introspection.
 
 ## Build & Dev Commands
 
@@ -12,7 +12,7 @@ cargo build
 cargo build --features oracle
 
 # Build release
-cargo build --release -p polar-mysql --features oracle
+cargo build --release -p polar-mysql --features oracle,gaussdb
 
 # Format check
 cargo fmt --all -- --check
@@ -40,8 +40,8 @@ POLARDB_ORACLE_TEST_URL=oracle://system:testpass@127.0.0.1:1521/FREEPDB1 cargo t
 
 ```
 dbcli/                          # Cargo workspace root
-├── Cargo.toml                  # workspace: members = ["polar-mysql"]
-├── polar-mysql/
+├── Cargo.toml                  # workspace: members = ["dbcli"]
+├── dbcli/
 │   ├── Cargo.toml              # bin crate, name = "hepta_dbcli" (package = "polar-mysql")
 │   └── src/
 │       ├── main.rs             # CLI arg parsing (clap), entrypoint + MCP server bootstrap
@@ -52,7 +52,7 @@ dbcli/                          # Cargo workspace root
 │       ├── output.rs           # Table formatting (type mapping moved to backend/)
 │       ├── queries.rs          # Legacy: MySQL SQL strings (still used by check command)
 │       ├── connection.rs       # Legacy: MySQL connection helpers (still used by check command)
-│       ├── logger.rs           # Tracing to ~/.local/share/polar-mysql/polar-mysql.log (daily)
+│       ├── logger.rs           # Tracing to ~/.local/share/hepta-dbcli/hepta-dbcli.log (daily)
 │       └── backend/            # Multi-database abstraction layer
 │           ├── mod.rs          # DbPool, DbConn, Dialect, BackendFactory traits + QueryResult
 │           ├── error.rs        # DbError, DbErrorKind

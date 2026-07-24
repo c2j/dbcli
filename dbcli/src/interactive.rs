@@ -14,8 +14,8 @@ use tracing::{info, warn};
 
 use crate::backend::factory::BackendRegistry;
 use crate::backend::DbConn;
-use crate::cli::{execute_query, render_result, CliArgs, OutputFormat};
 use crate::cli::QueryResult;
+use crate::cli::{execute_query, render_result, CliArgs, OutputFormat};
 use crate::config::{
     read_config, resolve_env_var_connection, resolve_single_connection,
     rewrite_password_to_sentinel, store_keyring_password, TimeoutConfig,
@@ -31,14 +31,21 @@ pub(crate) struct SplitResult {
 pub(crate) struct SqlTokenizer;
 
 impl SqlTokenizer {
-    pub(crate) fn split_statements(input: &str) -> SplitResult {
+    pub(crate) fn split_statements(
+        input: &str,
+        id_quote: char,
+        hash_comment: bool,
+        dollar_quote: bool,
+    ) -> SplitResult {
         let mut complete: Vec<String> = Vec::new();
         let mut current = String::new();
         let mut in_single_quote = false;
         let mut in_double_quote = false;
-        let mut in_backtick = false;
+        let mut in_id_quote = false;
         let mut in_line_comment = false;
         let mut in_block_comment_depth: u32 = 0;
+        let mut in_dollar_quote = false;
+        let mut dollar_quote_tag: Option<String> = None;
 
         let chars: Vec<char> = input.chars().collect();
         let len = chars.len();
@@ -95,10 +102,44 @@ impl SqlTokenizer {
                 continue;
             }
 
-            if in_backtick {
+            if let Some(ref tag) = dollar_quote_tag {
                 current.push(c);
-                if c == '`' {
-                    in_backtick = false;
+                if c == '$' && dollar_quote {
+                    if tag.is_empty() {
+                        if i + 1 < len && chars[i + 1] == '$' {
+                            i += 1;
+                            current.push(chars[i]);
+                            dollar_quote_tag = None;
+                        }
+                    } else {
+                        let tag_chars: Vec<char> = tag.chars().collect();
+                        let tag_len = tag_chars.len();
+                        if i + 1 + tag_len < len && chars[i + 1 + tag_len] == '$' {
+                            let mut matches = true;
+                            for (k, &tc) in tag_chars.iter().enumerate() {
+                                if chars[i + 1 + k] != tc {
+                                    matches = false;
+                                    break;
+                                }
+                            }
+                            if matches {
+                                for _ in 0..=tag_len {
+                                    i += 1;
+                                    current.push(chars[i]);
+                                }
+                                dollar_quote_tag = None;
+                            }
+                        }
+                    }
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_id_quote {
+                current.push(c);
+                if c == id_quote {
+                    in_id_quote = false;
                 }
                 i += 1;
                 continue;
@@ -113,8 +154,33 @@ impl SqlTokenizer {
                     in_double_quote = true;
                     current.push(c);
                 }
-                '`' => {
-                    in_backtick = true;
+                '$' if dollar_quote => {
+                    if i + 1 < len && chars[i + 1] == '$' {
+                        dollar_quote_tag = Some(String::new());
+                        current.push(c);
+                        i += 1;
+                        current.push(chars[i]);
+                    } else if i + 1 < len
+                        && (chars[i + 1].is_ascii_alphabetic() || chars[i + 1] == '_')
+                    {
+                        let mut j = i + 1;
+                        while j < len && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+                            j += 1;
+                        }
+                        if j < len && chars[j] == '$' {
+                            let tag: String = chars[i + 1..j].iter().collect();
+                            dollar_quote_tag = Some(tag);
+                            current.extend(chars[i..=j].iter());
+                            i = j;
+                        } else {
+                            current.push(c);
+                        }
+                    } else {
+                        current.push(c);
+                    }
+                }
+                c if c == id_quote => {
+                    in_id_quote = true;
                     current.push(c);
                 }
                 '-' if i + 1 < len && chars[i + 1] == '-' => {
@@ -123,7 +189,7 @@ impl SqlTokenizer {
                     i += 1;
                     current.push(chars[i]);
                 }
-                '#' => {
+                '#' if hash_comment => {
                     in_line_comment = true;
                     current.push(c);
                 }
@@ -157,7 +223,11 @@ impl SqlTokenizer {
 // ─── rustyline Helper ──────────────────────────────────────────────────
 
 #[derive(Completer, Helper, Hinter)]
-struct SqlHelper;
+struct SqlHelper {
+    id_quote: char,
+    hash_comment: bool,
+    dollar_quote: bool,
+}
 
 impl Validator for SqlHelper {
     fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
@@ -166,7 +236,12 @@ impl Validator for SqlHelper {
         if trimmed.is_empty() || trimmed.starts_with('.') || trimmed == "?" {
             return Ok(ValidationResult::Valid(None));
         }
-        let split = SqlTokenizer::split_statements(input);
+        let split = SqlTokenizer::split_statements(
+            input,
+            self.id_quote,
+            self.hash_comment,
+            self.dollar_quote,
+        );
         if split.remainder.trim().is_empty() {
             Ok(ValidationResult::Valid(None))
         } else {
@@ -361,7 +436,7 @@ fn history_path_for(connection_name: &str) -> Option<PathBuf> {
 const PROMPT: &str = "$ ";
 
 fn print_banner(name: &str) {
-    println!("polar-mysql interactive -- connected to '{}'", name);
+    println!("hepta_dbcli interactive -- connected to '{}'", name);
     println!("end SQL with ';' + Enter to execute (multi-line ok) .help .connect .exit");
 }
 
@@ -406,7 +481,11 @@ async fn connect(
     effective_timeout: &TimeoutConfig,
     registry: &BackendRegistry,
 ) -> Result<Box<dyn DbConn + Send>, String> {
-    let scheme = target.connection_url.find("://").map(|i| &target.connection_url[..i]).unwrap_or("mysql");
+    let scheme = target
+        .connection_url
+        .find("://")
+        .map(|i| &target.connection_url[..i])
+        .unwrap_or("mysql");
     let pool = registry
         .connect_with_fallback(scheme, &target.connection_url, Some(effective_timeout))
         .await
@@ -445,7 +524,10 @@ async fn connect(
     Ok(conn)
 }
 
-pub(crate) async fn run_interactive(args: CliArgs, registry: &BackendRegistry) -> Result<(), String> {
+pub(crate) async fn run_interactive(
+    args: CliArgs,
+    registry: &BackendRegistry,
+) -> Result<(), String> {
     let raw = read_config(args.config_path.map(PathBuf::from))?;
 
     let (mut target, effective_timeout) = resolve_target(
@@ -458,7 +540,14 @@ pub(crate) async fn run_interactive(args: CliArgs, registry: &BackendRegistry) -
 
     let mut rl = Editor::<SqlHelper, DefaultHistory>::new()
         .map_err(|e| format!("failed to init editor: {}", e))?;
-    rl.set_helper(Some(SqlHelper));
+    let id_quote = conn.dialect().identifier_quote();
+    let hash_comment = conn.dialect().supports_hash_comment();
+    let dollar_quote = conn.dialect().supports_dollar_quote();
+    rl.set_helper(Some(SqlHelper {
+        id_quote,
+        hash_comment,
+        dollar_quote,
+    }));
 
     let _ = rl.set_max_history_size(HISTORY_MAX_ENTRIES);
 
@@ -525,32 +614,39 @@ pub(crate) async fn run_interactive(args: CliArgs, registry: &BackendRegistry) -
                 args.statement_timeout.as_deref(),
                 args.connection_max_lifetime.as_deref(),
             ) {
-                Ok((new_target, new_timeout)) => match connect(&new_target, &new_timeout, registry).await {
-                    Ok(new_conn) => {
-                        // Save history for old connection
-                        if target.name != new_target.name {
+                Ok((new_target, new_timeout)) => {
+                    match connect(&new_target, &new_timeout, registry).await {
+                        Ok(new_conn) => {
+                            // Save history for old connection
+                            if target.name != new_target.name {
+                                if let Some(p) = &history_path {
+                                    let _ = rl.save_history(p);
+                                }
+                            }
+                            target = new_target;
+                            conn = new_conn;
+                            if let Some(h) = rl.helper_mut() {
+                                h.id_quote = conn.dialect().identifier_quote();
+                                h.hash_comment = conn.dialect().supports_hash_comment();
+                                h.dollar_quote = conn.dialect().supports_dollar_quote();
+                            }
+                            history_path = if !args.no_history {
+                                history_path_for(&target.name)
+                            } else {
+                                None
+                            };
                             if let Some(p) = &history_path {
-                                let _ = rl.save_history(p);
+                                if let Some(parent) = p.parent() {
+                                    let _ = std::fs::create_dir_all(parent);
+                                }
+                                let _ = rl.clear_history();
+                                let _ = rl.load_history(p);
                             }
+                            print_banner(&target.name);
                         }
-                        target = new_target;
-                        conn = new_conn;
-                        history_path = if !args.no_history {
-                            history_path_for(&target.name)
-                        } else {
-                            None
-                        };
-                        if let Some(p) = &history_path {
-                            if let Some(parent) = p.parent() {
-                                let _ = std::fs::create_dir_all(parent);
-                            }
-                            let _ = rl.clear_history();
-                            let _ = rl.load_history(p);
-                        }
-                        print_banner(&target.name);
+                        Err(e) => eprintln!("error: {}", e),
                     }
-                    Err(e) => eprintln!("error: {}", e),
-                },
+                }
                 Err(e) => eprintln!("error: {}", e),
             }
             continue;
@@ -574,7 +670,12 @@ pub(crate) async fn run_interactive(args: CliArgs, registry: &BackendRegistry) -
 
         let _ = rl.add_history_entry(&input);
 
-        let split = SqlTokenizer::split_statements(&input);
+        let split = SqlTokenizer::split_statements(
+            &input,
+            conn.dialect().identifier_quote(),
+            conn.dialect().supports_hash_comment(),
+            conn.dialect().supports_dollar_quote(),
+        );
         for stmt in &split.complete {
             let query_result = execute_query(&mut *conn, stmt).await;
             match query_result {
@@ -635,49 +736,49 @@ mod tests {
 
     #[test]
     fn test_split_single_statement() {
-        let r = SqlTokenizer::split_statements("SELECT 1;");
+        let r = SqlTokenizer::split_statements("SELECT 1;", '`', true, false);
         assert_eq!(r.complete, vec!["SELECT 1"]);
         assert_eq!(r.remainder, "");
     }
 
     #[test]
     fn test_split_multiple_statements() {
-        let r = SqlTokenizer::split_statements("SELECT 1; SELECT 2;");
+        let r = SqlTokenizer::split_statements("SELECT 1; SELECT 2;", '`', true, false);
         assert_eq!(r.complete, vec!["SELECT 1", "SELECT 2"]);
         assert_eq!(r.remainder, "");
     }
 
     #[test]
     fn test_split_semicolon_in_quotes() {
-        let r = SqlTokenizer::split_statements("SELECT ';' AS a;");
+        let r = SqlTokenizer::split_statements("SELECT ';' AS a;", '`', true, false);
         assert_eq!(r.complete, vec!["SELECT ';' AS a"]);
         assert_eq!(r.remainder, "");
     }
 
     #[test]
     fn test_split_backtick_quoting() {
-        let r = SqlTokenizer::split_statements("SELECT `;` AS a;");
+        let r = SqlTokenizer::split_statements("SELECT `;` AS a;", '`', true, false);
         assert_eq!(r.complete, vec!["SELECT `;` AS a"]);
         assert_eq!(r.remainder, "");
     }
 
     #[test]
     fn test_split_hash_comment() {
-        let r = SqlTokenizer::split_statements("SELECT 1 # comment\n;");
+        let r = SqlTokenizer::split_statements("SELECT 1 # comment\n;", '`', true, false);
         assert_eq!(r.complete, vec!["SELECT 1 # comment"]);
         assert_eq!(r.remainder, "");
     }
 
     #[test]
     fn test_split_incomplete_no_semicolon() {
-        let r = SqlTokenizer::split_statements("SELECT 'a'");
+        let r = SqlTokenizer::split_statements("SELECT 'a'", '`', true, false);
         assert!(r.complete.is_empty());
         assert_eq!(r.remainder, "SELECT 'a'");
     }
 
     #[test]
     fn test_split_double_semicolons() {
-        let r = SqlTokenizer::split_statements(";;");
+        let r = SqlTokenizer::split_statements(";;", '`', true, false);
         assert!(r.complete.is_empty());
         assert_eq!(r.remainder, "");
     }
@@ -688,5 +789,74 @@ mod tests {
         assert_eq!(sanitize_history_name("prod/shard1"), "prod_shard1");
         assert_eq!(sanitize_history_name(""), "default");
         assert_eq!(sanitize_history_name("."), "default");
+    }
+
+    #[test]
+    fn test_split_double_quote_identifier() {
+        let r = SqlTokenizer::split_statements("SELECT \";\" AS a;", '"', false, false);
+        assert_eq!(r.complete, vec!["SELECT \";\" AS a"]);
+    }
+
+    #[test]
+    fn test_split_no_hash_comment() {
+        let r =
+            SqlTokenizer::split_statements("SELECT 1 # not comment\nFROM t;", '"', false, false);
+        assert_eq!(r.complete, vec!["SELECT 1 # not comment\nFROM t"]);
+    }
+
+    #[test]
+    fn test_split_dollar_quote_untagged() {
+        let sql = "SELECT $$hello; world$$ AS msg;";
+        let r = SqlTokenizer::split_statements(sql, '"', false, true);
+        assert_eq!(r.complete, vec!["SELECT $$hello; world$$ AS msg"]);
+        assert_eq!(r.remainder, "");
+    }
+
+    #[test]
+    fn test_split_dollar_quote_tagged() {
+        let sql = "SELECT $body$hello; world$body$ AS msg;";
+        let r = SqlTokenizer::split_statements(sql, '"', false, true);
+        assert_eq!(r.complete, vec!["SELECT $body$hello; world$body$ AS msg"]);
+        assert_eq!(r.remainder, "");
+    }
+
+    #[test]
+    fn test_split_dollar_quote_function_definition() {
+        let sql = "CREATE FUNCTION foo() RETURNS void AS $$\nBEGIN\n  RAISE NOTICE 'hi';\nEND;\n$$ LANGUAGE plpgsql;";
+        let r = SqlTokenizer::split_statements(sql, '"', false, true);
+        assert_eq!(r.complete.len(), 1);
+        assert_eq!(r.remainder, "");
+        assert!(r.complete[0].contains("CREATE FUNCTION foo()"));
+    }
+
+    #[test]
+    fn test_split_dollar_quote_incomplete() {
+        let sql = "CREATE FUNCTION foo() AS $$\nBEGIN\n  SELECT 1;";
+        let r = SqlTokenizer::split_statements(sql, '"', false, true);
+        assert!(r.complete.is_empty());
+        assert_eq!(r.remainder, sql);
+    }
+
+    #[test]
+    fn test_split_positional_param_not_dollar_quote() {
+        let r = SqlTokenizer::split_statements("SELECT $1, $2;", '"', false, true);
+        assert_eq!(r.complete, vec!["SELECT $1, $2"]);
+        assert_eq!(r.remainder, "");
+    }
+
+    #[test]
+    fn test_split_dollar_quote_disabled_ignores() {
+        let sql = "SELECT $$a$$;";
+        let r = SqlTokenizer::split_statements(sql, '`', true, false);
+        assert_eq!(r.complete, vec!["SELECT $$a$$"]);
+        assert_eq!(r.remainder, "");
+    }
+
+    #[test]
+    fn test_split_dollar_quote_mysql_has_no_dollar() {
+        let sql = "SELECT $1, $2;";
+        let r = SqlTokenizer::split_statements(sql, '`', true, false);
+        assert_eq!(r.complete, vec!["SELECT $1, $2"]);
+        assert_eq!(r.remainder, "");
     }
 }

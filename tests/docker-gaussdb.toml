@@ -1,0 +1,17 @@
+# GaussDB connection config for integration testing
+# Usage: cargo run --features gaussdb -- --config tests/docker-gaussdb.toml cli --sql "..."
+#
+# Pre-built binary also works:
+#   GAUSSDB_TEST_URL="host=127.0.0.1 port=5432 user=gaussdb password=testpass@123 dbname=testdb"
+#     cargo test --features "gaussdb,integration" -- gaussdb
+
+default_connection = "gaussdb"
+
+[connections.gaussdb]
+driver = "gaussdb"
+host = "127.0.0.1"
+port = 5432
+user = "gaussdb"
+password = "testpass@123"
+database = "testdb"
+sslmode = "disable"
