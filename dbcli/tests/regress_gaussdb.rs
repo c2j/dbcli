@@ -117,7 +117,7 @@ mod tests {
     #[tokio::test]
     async fn gaussdb_read_only_prefixes() {
         let url = gaussdb_url();
-        let pool = polar_mysql::backend::factory::BackendRegistry::new();
+        let _pool = polar_mysql::backend::factory::BackendRegistry::new();
         // Create registry and register factory
         use polar_mysql::backend::BackendFactory;
         use std::sync::Arc;

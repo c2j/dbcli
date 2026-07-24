@@ -29,6 +29,7 @@ pub async fn sleep_ms(ms: u64) {
 
 /// Connect to the backend using registration-free factory pattern.
 /// Used by tests that have a direct connection to a backend.
+#[allow(dead_code)]
 pub async fn connect_pool<F>(factory: F, url: &str) -> Arc<dyn polar_mysql::backend::DbPool>
 where
     F: polar_mysql::backend::BackendFactory + 'static,
