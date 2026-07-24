@@ -6,7 +6,7 @@ mod common;
 
 #[cfg(feature = "integration")]
 mod tests {
-    use polar_mysql::test_helpers::MySqlFactory;
+    use polar_mysql::backend::mysql::MySqlFactory;
     use serde_json::Value;
     use std::sync::atomic::{AtomicU32, Ordering};
 

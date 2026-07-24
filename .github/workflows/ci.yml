@@ -9,6 +9,7 @@ on:
       - main
 
 env:
+  RUSTFLAGS: -Dwarnings
   RUST_BACKTRACE: 1
 
 jobs:

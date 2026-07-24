@@ -6,7 +6,7 @@ mod common;
 
 #[cfg(all(feature = "integration", feature = "oracle"))]
 mod tests {
-    use polar_mysql::test_helpers::OracleFactory;
+    use polar_mysql::backend::oracle::OracleFactory;
     use serde_json::Value;
 
     fn oracle_url() -> String {
