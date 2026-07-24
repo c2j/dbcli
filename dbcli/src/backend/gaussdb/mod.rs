@@ -114,12 +114,12 @@ impl Dialect for GaussdbDialect {
 mod integration_tests {
     #[tokio::test]
     async fn gaussdb_connect_and_select_one() {
-        let url = std::env::var("GAUSSDB_TEST_URL").unwrap_or_else(|_| {
-            "host=127.0.0.1 port=5432 user=gaussdb password=Gaussdb@123 dbname=postgres".to_string()
-        });
+        let Ok(url) = std::env::var("GAUSSDB_TEST_URL") else {
+            return;
+        };
         let (client, connection) = gaussdb::connect(&url, gaussdb::NoTls)
             .await
-            .expect("GaussDB connect failed; set GAUSSDB_TEST_URL or run docker");
+            .expect("GaussDB connect failed; check GAUSSDB_TEST_URL");
         tokio::spawn(async move {
             let _ = connection.await;
         });

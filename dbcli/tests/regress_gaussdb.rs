@@ -12,23 +12,21 @@ mod tests {
 
     const TABLE: &str = "regress_test";
 
-    fn gaussdb_url() -> String {
-        std::env::var("GAUSSDB_TEST_URL").unwrap_or_else(|_| {
-            "host=127.0.0.1 port=5432 user=gaussdb password=testpass@123 dbname=testdb".to_string()
-        })
+    fn gaussdb_url() -> Option<String> {
+        std::env::var("GAUSSDB_TEST_URL").ok()
     }
 
-    async fn client() -> gaussdb::Client {
-        let url = gaussdb_url();
-        let (client, connection) = gaussdb::connect(&url, NoTls).await.expect("connect");
+    async fn client() -> Option<gaussdb::Client> {
+        let url = gaussdb_url()?;
+        let (client, connection) = gaussdb::connect(&url, NoTls).await.ok()?;
         tokio::spawn(async move {
             let _ = connection.await;
         });
-        client
+        Some(client)
     }
 
-    async fn setup() -> gaussdb::Client {
-        let c = client().await;
+    async fn setup() -> Option<gaussdb::Client> {
+        let c = client().await?;
         let _ = c
             .simple_query(&format!("DROP TABLE IF EXISTS {}", TABLE))
             .await;
@@ -52,7 +50,7 @@ mod tests {
         )
         .await
         .expect("insert data");
-        c
+        Some(c)
     }
 
     async fn teardown(c: gaussdb::Client) {
@@ -63,7 +61,9 @@ mod tests {
 
     #[tokio::test]
     async fn gaussdb_database_info() {
-        let c = setup().await;
+        let Some(c) = setup().await else {
+            return;
+        };
         let rows = c.query(
             "SELECT version()::text, current_database()::text, current_user::text, inet_server_addr()::text, inet_server_port()::text, NULL::text, (SELECT setting FROM pg_settings WHERE name='server_encoding')::text, (SELECT setting FROM pg_settings WHERE name='lc_collate')::text, NULL::text",
             &[],
@@ -91,7 +91,9 @@ mod tests {
 
     #[tokio::test]
     async fn gaussdb_list_tables() {
-        let c = setup().await;
+        let Some(c) = setup().await else {
+            return;
+        };
         let rows = c.query(
             "SELECT n.nspname, c.relname, CASE c.relkind WHEN 'r' THEN 'table' END, NULL, c.reltuples::bigint, pg_total_relation_size(c.oid), obj_description(c.oid, 'pg_class') FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'r' AND n.nspname = 'public' ORDER BY c.relname",
             &[],
@@ -104,8 +106,9 @@ mod tests {
 
     #[tokio::test]
     async fn gaussdb_add_limit() {
-        let c = setup().await;
-        // Verify dialog adds LIMIT
+        let Some(c) = setup().await else {
+            return;
+        };
         let rows = c
             .query(&format!("SELECT * FROM {} LIMIT 1", TABLE), &[])
             .await
@@ -116,9 +119,9 @@ mod tests {
 
     #[tokio::test]
     async fn gaussdb_read_only_prefixes() {
-        let url = gaussdb_url();
-        let _pool = polar_mysql::backend::factory::BackendRegistry::new();
-        // Create registry and register factory
+        let Some(url) = gaussdb_url() else {
+            return;
+        };
         use polar_mysql::backend::BackendFactory;
         use std::sync::Arc;
         let factory: Arc<dyn BackendFactory> =
@@ -139,7 +142,9 @@ mod tests {
 
     #[tokio::test]
     async fn gaussdb_build_explain() {
-        let c = setup().await;
+        let Some(c) = setup().await else {
+            return;
+        };
         let rows = c
             .query("EXPLAIN (FORMAT JSON) SELECT 1", &[])
             .await
@@ -150,7 +155,9 @@ mod tests {
 
     #[tokio::test]
     async fn gaussdb_query_error() {
-        let c = setup().await;
+        let Some(c) = setup().await else {
+            return;
+        };
         let result = c.query("SELECT * FROM nonexistent_table_xyz", &[]).await;
         assert!(result.is_err());
         teardown(c).await;

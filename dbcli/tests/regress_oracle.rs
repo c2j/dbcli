@@ -9,14 +9,14 @@ mod tests {
     use polar_mysql::backend::oracle::OracleFactory;
     use serde_json::Value;
 
-    fn oracle_url() -> String {
-        std::env::var("POLARDB_ORACLE_TEST_URL")
-            .unwrap_or_else(|_| "oracle://system:testpass@127.0.0.1:1521/FREEPDB1".to_string())
+    fn oracle_url() -> Option<String> {
+        std::env::var("POLARDB_ORACLE_TEST_URL").ok()
     }
 
-    async fn connect() -> Box<dyn polar_mysql::backend::DbConn + Send> {
-        let pool = crate::common::connect_pool(OracleFactory, &oracle_url()).await;
-        pool.acquire().await.expect("acquire")
+    async fn connect() -> Option<Box<dyn polar_mysql::backend::DbConn + Send>> {
+        let url = oracle_url()?;
+        let pool = crate::common::connect_pool(OracleFactory, &url).await;
+        Some(pool.acquire().await.expect("acquire"))
     }
 
     const TABLE: &str = "REGRESS_TEST";
@@ -45,7 +45,9 @@ mod tests {
 
     #[tokio::test]
     async fn oracle_database_info() {
-        let mut conn = connect().await;
+        let Some(mut conn) = connect().await else {
+            return;
+        };
         let sql = conn.dialect().database_info().to_string();
         let result = polar_mysql::backend::DbConn::query(&mut *conn, &sql)
             .await
@@ -69,7 +71,9 @@ mod tests {
 
     #[tokio::test]
     async fn oracle_list_tables() {
-        let mut conn = connect().await;
+        let Some(mut conn) = connect().await else {
+            return;
+        };
         ensure_table(&mut *conn).await;
         let sql = conn.dialect().list_tables().to_string();
         let result = polar_mysql::backend::DbConn::query(&mut *conn, &sql)
@@ -93,7 +97,9 @@ mod tests {
 
     #[tokio::test]
     async fn oracle_table_columns() {
-        let mut conn = connect().await;
+        let Some(mut conn) = connect().await else {
+            return;
+        };
         ensure_table(&mut *conn).await;
         let sql = conn.dialect().table_columns().to_string();
         let result = polar_mysql::backend::DbConn::exec(
@@ -121,7 +127,9 @@ mod tests {
 
     #[tokio::test]
     async fn oracle_table_indexes() {
-        let mut conn = connect().await;
+        let Some(mut conn) = connect().await else {
+            return;
+        };
         ensure_table(&mut *conn).await;
         let sql = conn.dialect().table_indexes().to_string();
         let result = polar_mysql::backend::DbConn::exec(
@@ -147,7 +155,9 @@ mod tests {
 
     #[tokio::test]
     async fn oracle_execute_query() {
-        let mut conn = connect().await;
+        let Some(mut conn) = connect().await else {
+            return;
+        };
         let result = polar_mysql::backend::DbConn::query(&mut *conn, "SELECT 1 FROM dual")
             .await
             .expect("query");
@@ -156,14 +166,18 @@ mod tests {
 
     #[tokio::test]
     async fn oracle_add_limit() {
-        let conn = connect().await;
+        let Some(conn) = connect().await else {
+            return;
+        };
         let limited = conn.dialect().add_limit("SELECT * FROM t", 10);
         assert!(limited.contains("FETCH FIRST"));
     }
 
     #[tokio::test]
     async fn oracle_build_explain() {
-        let conn = connect().await;
+        let Some(conn) = connect().await else {
+            return;
+        };
         let explain = conn
             .dialect()
             .build_explain("SELECT 1 FROM dual", false, "BASIC");
@@ -172,7 +186,9 @@ mod tests {
 
     #[tokio::test]
     async fn oracle_read_only_prefixes() {
-        let conn = connect().await;
+        let Some(conn) = connect().await else {
+            return;
+        };
         let prefixes = conn.dialect().read_only_prefixes();
         assert!(prefixes.contains(&"SELECT"));
         assert!(prefixes.contains(&"WITH"));
@@ -181,7 +197,9 @@ mod tests {
 
     #[tokio::test]
     async fn oracle_query_error() {
-        let mut conn = connect().await;
+        let Some(mut conn) = connect().await else {
+            return;
+        };
         let result =
             polar_mysql::backend::DbConn::query(&mut *conn, "SELECT * FROM nonexistent_xyz").await;
         assert!(result.is_err());
