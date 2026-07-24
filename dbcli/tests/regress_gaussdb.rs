@@ -9,7 +9,6 @@ mod common;
 mod tests {
     use crate::common;
     use gaussdb::NoTls;
-    use serde_json::Value;
 
     const TABLE: &str = "regress_test";
 

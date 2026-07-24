@@ -27,7 +27,7 @@ mod tests {
         format!("{}_{}", prefix, id)
     }
 
-    async fn ensure_table(mut conn: &mut dyn polar_mysql::backend::DbConn) -> String {
+    async fn ensure_table(conn: &mut dyn polar_mysql::backend::DbConn) -> String {
         let name = unique_name("_rt");
         conn.query_drop(&format!("DROP TABLE IF EXISTS {}", name))
             .await

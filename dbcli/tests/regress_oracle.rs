@@ -21,7 +21,7 @@ mod tests {
 
     const TABLE: &str = "REGRESS_TEST";
 
-    async fn ensure_table(mut conn: &mut dyn polar_mysql::backend::DbConn) {
+    async fn ensure_table(conn: &mut dyn polar_mysql::backend::DbConn) {
         let _ = conn
             .query_drop(&format!(
                 "BEGIN EXECUTE IMMEDIATE 'DROP TABLE {}'; EXCEPTION WHEN OTHERS THEN NULL; END;",

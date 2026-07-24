@@ -22,6 +22,7 @@ pub fn assert_columns(actual: &[String], expected: &[&str]) {
 }
 
 /// Wait for health. Useful after Fixture creation.
+#[allow(dead_code)]
 pub async fn sleep_ms(ms: u64) {
     tokio::time::sleep(Duration::from_millis(ms)).await;
 }
