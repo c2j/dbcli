@@ -25,7 +25,7 @@ cargo clippy --all --all-targets
 cargo test --all
 
 # Integration tests (require running MySQL)
-POLARDB_MYSQL_TEST_URL=mysql://mcp:testpass@127.0.0.1:3306/testdb cargo test --all --features integration
+HEPTA_DBCLI_TEST_URL=mysql://mcp:testpass@127.0.0.1:3306/testdb cargo test --all --features integration
 
 # Oracle tests (unit)
 cargo test --features oracle
@@ -104,8 +104,8 @@ Adding a new database requires implementing these three traits + a `BackendFacto
 ## Quirks & Gotchas
 
 ### Connection Config
-- Config file: `~/.polardb-mysql.toml` (TOML format)
-- Env var override: `POLARDB_MYSQL_URL=mysql://user:pass@host:port/db`
+- Config file: `~/.hepta-dbcli.toml` (TOML format, also reads legacy `~/.polardb-mysql.toml`)
+- Env var override: `HEPTA_DBCLI_URL=mysql://user:pass@host:port/db`
 - Multi-connection support via `[connections.NAME]` sections in TOML
 - **`driver` field**: set `driver = "oracle"` for Oracle connections (defaults to `"mysql"`)
 - Password stored in OS keychain (macOS Keychain, Linux Secret Service). Plaintext passwords in config are **auto-migrated** to keychain on first successful connection.
@@ -147,7 +147,7 @@ When a connection has `password = "keyring"` (sentinel value), the system reads 
 ### Testing
 - Unit tests are **inline** (`#[cfg(test)] mod tests { ... }`) in each source file — there is no `/tests/` directory.
 - Integration tests live behind the `integration` feature flag in the same `#[cfg(test)]` blocks.
-- MySQL integration tests require `POLARDB_MYSQL_TEST_URL` env var and a running MySQL instance.
+- MySQL integration tests require `HEPTA_DBCLI_TEST_URL` env var and a running MySQL instance.
 - Oracle integration tests require `POLARDB_ORACLE_TEST_URL` env var and a running Oracle instance (Docker: `gvenzl/oracle-free:23-slim`).
 
 ### MCP Server

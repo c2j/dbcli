@@ -2,14 +2,33 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use tracing::warn;
+
 use crate::backend::{default_port_for_scheme, ssl_url_param_for_scheme};
 
 // ─── Constants ─────────────────────────────────────────────────────────
 
-pub(crate) const KEYRING_SERVICE: &str = "polar-mysql";
+pub(crate) const KEYRING_SERVICE: &str = "hepta-dbcli";
+pub(crate) const OLD_KEYRING_SERVICE: &str = "polar-mysql";
 pub(crate) const KEYRING_SENTINEL: &str = "keyring";
-pub(crate) const DEFAULT_CONFIG_FILENAME: &str = "polardb-mysql.toml";
-pub(crate) const ENV_VAR_URL: &str = "POLARDB_MYSQL_URL";
+pub(crate) const DEFAULT_CONFIG_FILENAME: &str = "hepta-dbcli.toml";
+pub(crate) const OLD_DEFAULT_CONFIG_FILENAME: &str = "polardb-mysql.toml";
+pub(crate) const ENV_VAR_URL: &str = "HEPTA_DBCLI_URL";
+
+// ─── Keyring account helpers ────────────────────────────────────────
+
+/// Compute a stable 8-char hex hash from the canonical config path.
+/// Uses djb2 hash (deterministic across platforms and Rust versions).
+fn config_path_hash(config_path: Option<&Path>) -> String {
+    let path_str = config_path
+        .and_then(|p| p.canonicalize().ok())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let hash = path_str
+        .bytes()
+        .fold(5381u64, |h, b| h.wrapping_mul(33).wrapping_add(b as u64));
+    format!("{:08x}", hash as u32)
+}
 
 // ─── Password Source ───────────────────────────────────────────────────
 
@@ -110,7 +129,11 @@ pub(crate) struct NamedConnection {
 }
 
 impl NamedConnection {
-    pub(crate) fn keyring_username(&self) -> String {
+    pub(crate) fn keyring_username(&self, config_path: Option<&Path>) -> String {
+        format!("{}#{}", self.name, config_path_hash(config_path))
+    }
+
+    pub(crate) fn old_keyring_username(&self) -> String {
         format!("{}/{}", self.user.as_deref().unwrap_or("root"), self.name)
     }
 }
@@ -182,12 +205,20 @@ pub(crate) fn find_config_path(opt: Option<PathBuf>) -> Result<PathBuf, String> 
                     return Ok(p.clone());
                 }
             }
-            Err("No connection configuration found. Use one of:\n\
+            if let Some(old_path) = dirs::home_dir()
+                .map(|p| p.join(format!(".{}", OLD_DEFAULT_CONFIG_FILENAME)))
+            {
+                if old_path.exists() {
+                    return Ok(old_path);
+                }
+            }
+            Err(format!(
+                "No connection configuration found. Use one of:\n\
                  \n\
-                 1. Set POLARDB_MYSQL_URL environment variable\n\
-                    export POLARDB_MYSQL_URL=\"mysql://user:password@host:port/database\"\n\
+                 1. Set {env} environment variable\n\
+                    export {env}=\"mysql://user:password@host:port/database\"\n\
                  \n\
-                 2. Create ~/.polardb-mysql.toml config file:\n\
+                 2. Create ~/.{name} config file:\n\
                     host = \"127.0.0.1\"\n\
                     user = \"root\"\n\
                     password = \"secret\"\n\
@@ -195,8 +226,10 @@ pub(crate) fn find_config_path(opt: Option<PathBuf>) -> Result<PathBuf, String> 
                  \n\
                  3. Pass --config <path> to specify a config file\n\
                  \n\
-                 Password will be migrated to OS keychain on first successful connection."
-                .to_string())
+                 Password will be migrated to OS keychain on first successful connection.",
+                env = ENV_VAR_URL,
+                name = DEFAULT_CONFIG_FILENAME
+            ))
         }
     }
 }
@@ -405,18 +438,40 @@ pub(crate) fn store_keyring_password(username: &str, password: &str) -> Result<(
         .map_err(|e| format!("failed to store password in keychain: {}", e))
 }
 
-pub(crate) fn read_keyring_password(username: &str) -> Result<String, String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, username)
+pub(crate) fn read_keyring_password(new_username: &str, old_username: &str) -> Result<String, String> {
+    let new_result = try_read_keyring(KEYRING_SERVICE, new_username);
+    if let Ok(pw) = new_result {
+        return Ok(pw);
+    }
+    let old_result = try_read_keyring(OLD_KEYRING_SERVICE, old_username);
+    if let Ok(pw) = old_result {
+        if let Err(e) = store_keyring_password(new_username, &pw) {
+            warn!(
+                "keyring migration failed for '{}': {} (password still usable from old entry)",
+                new_username, e
+            );
+        }
+        return Ok(pw);
+    }
+    let last_err = old_result
+        .err()
+        .or_else(|| new_result.err())
+        .unwrap_or_default();
+    Err(format!(
+        "keyring password not found for '{}'. Store it first:\n  \
+         hepta_dbcli store-password --name <connection>\n  \
+         or set password in config file as plaintext (will be migrated automatically).\n  \
+         (also checked old keyring entry '{}' — not found; keyring error: {})",
+        new_username, old_username, last_err
+    ))
+}
+
+fn try_read_keyring(service: &str, username: &str) -> Result<String, String> {
+    let entry = keyring::Entry::new(service, username)
         .map_err(|e| format!("keyring entry creation failed: {}", e))?;
-    entry.get_password().map_err(|e| {
-        format!(
-            "keyring password not found for '{}'. Store it first:\n  \
-             polar-mysql store-password --name <connection>\n  \
-             or set password in config file as plaintext (will be migrated automatically).\n  \
-             Keyring error: {}",
-            username, e
-        )
-    })
+    entry
+        .get_password()
+        .map_err(|e| format!("keyring read failed: {}", e))
 }
 
 // ─── Resolve Single Connection ───────────────────────────────────────
@@ -450,7 +505,7 @@ pub(crate) fn resolve_single_connection(
         Some(p) => PasswordSource::Plaintext(p.to_string()),
         None => {
             // Check env var
-            if let Ok(_pw) = std::env::var("POLARDB_MYSQL_PASSWORD") {
+            if let Ok(_pw) = std::env::var("HEPTA_DBCLI_PASSWORD") {
                 PasswordSource::EnvVar
             } else {
                 PasswordSource::None
@@ -467,7 +522,10 @@ pub(crate) fn resolve_single_connection(
 
     // If password source is keyring, resolve it now
     let connection_url = if matches!(password_source, PasswordSource::Keyring) {
-        let pw = read_keyring_password(&conn.keyring_username())?;
+        let pw = read_keyring_password(
+            &conn.keyring_username(config_path.as_deref()),
+            &conn.old_keyring_username(),
+        )?;
         if let Some(ref u) = conn.url {
             replace_password_in_url(u, &pw)
         } else {
@@ -490,7 +548,7 @@ pub(crate) fn resolve_single_connection(
         if let Some(ref u) = conn.url {
             u.clone()
         } else {
-            let pw = std::env::var("POLARDB_MYSQL_PASSWORD").unwrap_or_default();
+            let pw = std::env::var("HEPTA_DBCLI_PASSWORD").unwrap_or_default();
             let host = conn.host.as_deref().unwrap();
             let port = conn.port.unwrap_or(default_port_for_scheme(driver_scheme));
             let user = conn.user.as_deref().unwrap();
@@ -520,7 +578,7 @@ pub(crate) fn resolve_single_connection(
         name: conn.name.clone(),
         connection_url,
         password_source,
-        keyring_username: conn.keyring_username(),
+        keyring_username: conn.keyring_username(config_path.as_deref()),
         config_path,
         plaintext_password,
         timeout_config,
@@ -552,7 +610,7 @@ pub(crate) fn resolve_env_var_connection(url: String) -> ResolvedConnection {
         name: "default".to_string(),
         connection_url: url,
         password_source: PasswordSource::EnvVar,
-        keyring_username: "default/default".to_string(),
+        keyring_username: format!("default#{}", config_path_hash(None)),
         config_path: None,
         plaintext_password: None,
         timeout_config,
@@ -591,11 +649,14 @@ pub(crate) fn build_lazy_resolver(
     let driver = conn.driver.clone();
     let name = conn.name.clone();
     let name_clone = conn.name.clone();
-    let keyring_user = conn.keyring_username();
+    let keyring_user = conn.keyring_username(config_path.as_deref());
+    let old_keyring_user = conn.old_keyring_username();
 
     let resolver = Arc::new(move || {
         let password = match password_source {
-            PasswordSource::Keyring => Some(read_keyring_password(&keyring_user)?),
+            PasswordSource::Keyring => {
+                Some(read_keyring_password(&keyring_user, &old_keyring_user)?)
+            }
             PasswordSource::None => None,
             _ => unreachable!(),
         };
@@ -802,7 +863,11 @@ mod tests {
             statement_timeout: None,
             connection_max_lifetime: None,
         };
-        assert_eq!(conn.keyring_username(), "root/dev");
+        assert_eq!(
+            conn.keyring_username(None),
+            "dev#00001505"
+        );
+        assert_eq!(conn.old_keyring_username(), "root/dev");
     }
 
     // ─── rewrite_password_to_sentinel regression tests ─────────────────

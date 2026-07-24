@@ -265,7 +265,7 @@ impl DbMcp {
                             ),
                             Some(json!({
                                 "connection_name": name,
-                                "hint": "Check your polar-mysql configuration and OS keychain access"
+                                "hint": "Check your hepta_dbcli configuration and OS keychain access"
                             })),
                         )
                     })?;
@@ -658,7 +658,7 @@ impl DbMcp {
 
 #[tool_handler(
     name = "hepta_dbcli",
-    version = "0.2.3",
+    version = "0.2.8",
     instructions = "MCP server for MySQL/PolarDB-X/Oracle/GaussDB database introspection with multi-connection support"
 )]
 impl ServerHandler for DbMcp {}

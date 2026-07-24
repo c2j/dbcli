@@ -30,7 +30,7 @@ cargo build --release -p polar-mysql
 
 ### Config file
 
-Create `~/.polardb-mysql.toml`:
+Create `~/.hepta-dbcli.toml` (also reads legacy `~/.polardb-mysql.toml`):
 
 ```toml
 # Single connection (sections below are the defaults)
@@ -71,10 +71,10 @@ database = "FREEPDB1"
 ### Environment variable
 
 ```bash
-export POLARDB_MYSQL_URL="mysql://user:password@host:port/database"
+export HEPTA_DBCLI_URL="mysql://user:password@host:port/database"
 
 # Oracle via URL
-export POLARDB_MYSQL_URL="oracle://scott:tiger@host:1521/FREEPDB1"
+export HEPTA_DBCLI_URL="oracle://scott:tiger@host:1521/FREEPDB1"
 ```
 
 ### Timeout settings
@@ -196,7 +196,7 @@ cargo clippy --all --all-targets
 cargo test --all
 
 # Integration tests (requires running MySQL instance)
-POLARDB_MYSQL_TEST_URL=mysql://mcp:testpass@127.0.0.1:3306/testdb cargo test --all --features integration
+HEPTA_DBCLI_TEST_URL=mysql://mcp:testpass@127.0.0.1:3306/testdb cargo test --all --features integration
 
 # Oracle unit tests
 cargo test --features oracle
@@ -224,7 +224,7 @@ docker exec mysql-test mysql -u root -ptestpass -e "
 "
 
 # Run tests
-POLARDB_MYSQL_TEST_URL=mysql://mcp:testpass@127.0.0.1:3306/testdb cargo test --all --features integration
+HEPTA_DBCLI_TEST_URL=mysql://mcp:testpass@127.0.0.1:3306/testdb cargo test --all --features integration
 ```
 
 ### Running Oracle for integration tests
