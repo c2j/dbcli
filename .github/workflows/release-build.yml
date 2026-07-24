@@ -25,6 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: c2j/rust-opengauss
+          path: ../rust-opengauss
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cross
         run: cargo install cross --locked
@@ -55,10 +59,16 @@ jobs:
     runs-on: ubuntu-22.04-arm
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout rust-opengauss
+        uses: actions/checkout@v4
+        with:
+          repository: c2j/rust-opengauss
+          path: ../rust-opengauss
       - name: Build in Ubuntu 20.04 (glibc 2.31)
         run: |
           docker run --rm \
             -v "$(pwd)":/project -w /project \
+            -v "$(pwd)/../rust-opengauss":/rust-opengauss \
             -v "$HOME/.cargo/registry":/root/.cargo/registry \
             ubuntu:20.04 \
             bash -c "
@@ -94,6 +104,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: c2j/rust-opengauss
+          path: ../rust-opengauss
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc

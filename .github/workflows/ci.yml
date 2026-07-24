@@ -18,6 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: c2j/rust-opengauss
+          path: ../rust-opengauss
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -28,6 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: c2j/rust-opengauss
+          path: ../rust-opengauss
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -69,6 +77,10 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: c2j/rust-opengauss
+          path: ../rust-opengauss
       - uses: dtolnay/rust-toolchain@stable
       - run: echo "version=$(rustc --version)" >> $GITHUB_OUTPUT
         id: rust-version

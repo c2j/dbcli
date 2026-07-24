@@ -57,8 +57,8 @@ rpassword = "7"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 csv = "1"
 async-trait = "0.1"
-gaussdb = { path = "../../rust-opengauss/crates/gaussdb", optional = true, features = [
-    "with-chrono-0_4", "with-rust_decimal-1", "with-serde_json-1", "with-uuid-1",
-] }
 rust_decimal = { version = "1", default-features = false, features = ["std"] }
 uuid = { version = "1", default-features = false, features = ["std"] }
+gaussdb = { git = "https://github.com/c2j/rust-opengauss", optional = true, features = [
+    "with-chrono-0_4", "with-rust_decimal-1", "with-serde_json-1", "with-uuid-1",
+] }
